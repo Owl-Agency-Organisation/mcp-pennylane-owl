@@ -2,7 +2,7 @@
 // MVP Phase 1 - 15 tools comptabilité
 
 const TOKEN = process.env.PENNYLANE_API_TOKEN;
-const BASE_URL = process.env.PENNYLANE_API_BASE_URL || 'https://app.pennylane.com/api/v2';
+const BASE_URL = process.env.PENNYLANE_API_BASE_URL || 'https://app.pennylane.com/api/external/v2';
 
 if (!TOKEN) {
   console.error('[Pennylane] Token manquant!');
@@ -41,53 +41,27 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
-    name: 'pennylane_get_trial_balance',
-    description: 'Obtenir la balance générale (trial balance) pour une période donnée. Indispensable pour vérifier l\'équilibre des comptes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-      },
-      required: ['start_date', 'end_date'],
-    },
-  },
-  {
-    name: 'pennylane_export_fec',
-    description: 'Exporter le Fichier des Écritures Comptables (FEC) pour une période donnée. Format obligatoire pour les contrôles fiscaux en France.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-      },
-      required: ['start_date', 'end_date'],
-    },
-  },
-  {
-    name: 'pennylane_get_ledger_entries',
-    description: 'Récupérer les écritures comptables (ledger entries) pour une période donnée. Utile pour audits et analyses détaillées.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        per_page: { type: 'number', description: 'Nombre de résultats par page (max 100)', default: 50 },
-      },
-      required: ['start_date', 'end_date'],
-    },
-  },
-  {
     name: 'pennylane_list_customer_invoices',
-    description: 'Lister les factures clients (customer invoices) avec filtres optionnels. Essentiel pour le suivi du CA.',
+    description: 'Lister les factures clients (customer invoices) avec filtres optionnels par date. Essentiel pour le suivi du CA.',
     inputSchema: {
       type: 'object',
       properties: {
         start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
         end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        status: { type: 'string', description: 'Statut : draft, pending, paid, late, cancelled', enum: ['draft', 'pending', 'paid', 'late', 'cancelled'] },
-        per_page: { type: 'number', description: 'Nombre de résultats par page (max 100)', default: 50 },
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
       },
+    },
+  },
+  {
+    name: 'pennylane_analyze_customer_invoices',
+    description: 'Analyser les factures clients : CA total, nombre de factures, factures impayées pour une période donnée.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
+      },
+      required: ['start_date', 'end_date'],
     },
   },
   {
@@ -102,8 +76,20 @@ const TOOLS = [
     },
   },
   {
-    name: 'pennylane_analyze_customer_invoices',
-    description: 'Analyser les factures clients : CA total, nombre de factures, factures impayées, délai moyen de paiement, top clients.',
+    name: 'pennylane_list_supplier_invoices',
+    description: 'Lister les factures fournisseurs (supplier invoices) avec filtres optionnels par date. Essentiel pour le suivi des charges.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
+      },
+    },
+  },
+  {
+    name: 'pennylane_analyze_supplier_invoices',
+    description: 'Analyser les factures fournisseurs : charges totales, nombre de factures, factures impayées pour une période.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -111,19 +97,6 @@ const TOOLS = [
         end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
       },
       required: ['start_date', 'end_date'],
-    },
-  },
-  {
-    name: 'pennylane_list_supplier_invoices',
-    description: 'Lister les factures fournisseurs (supplier invoices) avec filtres optionnels. Essentiel pour le suivi des charges.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        status: { type: 'string', description: 'Statut : draft, pending, paid, late, cancelled', enum: ['draft', 'pending', 'paid', 'late', 'cancelled'] },
-        per_page: { type: 'number', description: 'Nombre de résultats par page (max 100)', default: 50 },
-      },
     },
   },
   {
@@ -138,18 +111,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'pennylane_analyze_supplier_invoices',
-    description: 'Analyser les factures fournisseurs : charges totales, nombre de factures, factures impayées, top fournisseurs.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-      },
-      required: ['start_date', 'end_date'],
-    },
-  },
-  {
     name: 'pennylane_list_transactions',
     description: 'Lister les transactions bancaires (bank transactions) avec filtres optionnels. Utile pour le suivi de trésorerie.',
     inputSchema: {
@@ -157,43 +118,23 @@ const TOOLS = [
       properties: {
         start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
         end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        bank_account_id: { type: 'string', description: 'ID du compte bancaire (optionnel)' },
-        matched: { type: 'boolean', description: 'Filtrer par rapprochement : true = rapprochées, false = non rapprochées' },
-        per_page: { type: 'number', description: 'Nombre de résultats par page (max 100)', default: 50 },
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
       },
     },
   },
   {
-    name: 'pennylane_get_bank_reconciliation_status',
-    description: 'Obtenir le statut des rapprochements bancaires : nombre de transactions rapprochées vs non rapprochées.',
+    name: 'pennylane_get_customers',
+    description: 'Lister tous les clients (customers) enregistrés dans Pennylane.',
     inputSchema: {
       type: 'object',
       properties: {
-        bank_account_id: { type: 'string', description: 'ID du compte bancaire (optionnel)' },
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
       },
-    },
-  },
-  {
-    name: 'pennylane_list_categories',
-    description: 'Lister les catégories comptables analytiques (analytical categories). Utile pour l\'organisation et l\'analyse par projet/service.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'pennylane_get_analytical_report',
-    description: 'Obtenir un rapport analytique par catégorie pour une période donnée. Permet d\'analyser les revenus et dépenses par catégorie.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        category_id: { type: 'string', description: 'ID de la catégorie (optionnel)' },
-      },
-      required: ['start_date', 'end_date'],
     },
   },
   {
     name: 'pennylane_get_user_context',
-    description: 'Obtenir le contexte utilisateur actuel : profil, entreprise, exercices fiscaux, permissions.',
+    description: 'Obtenir le contexte utilisateur actuel : profil, entreprise, exercices fiscaux.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
 ];
@@ -211,8 +152,10 @@ async function executeTool(name, args = {}) {
       case 'pennylane_health_check': {
         const user = await pennylane('/me');
         const fiscalYears = await pennylane('/fiscal_years');
-        const txResponse = await pennylane('/transactions?per_page=5&sort=date&direction=desc');
-        const transactions = txResponse.transactions || [];
+        
+        // Récupérer transactions récentes (avec filtres)
+        const txData = await pennylane('/transactions?limit=5&sort=-date');
+        const transactions = txData.items || txData.transactions || txData || [];
         
         return {
           status: 'ok',
@@ -231,144 +174,202 @@ async function executeTool(name, args = {}) {
         };
       }
       
-      // 2. Trial Balance
-      case 'pennylane_get_trial_balance': {
-        const { start_date, end_date } = args;
-        const data = await pennylane(`/trial_balance?start_date=${start_date}&end_date=${end_date}`);
-        return { start_date, end_date, trial_balance: data };
-      }
-      
-      // 3. Export FEC
-      case 'pennylane_export_fec': {
-        const { start_date, end_date } = args;
-        const data = await pennylane(`/fec/export?start_date=${start_date}&end_date=${end_date}`);
-        return { start_date, end_date, fec_export: data, note: 'Téléchargez le fichier via l\'URL fournie' };
-      }
-      
-      // 4. Ledger Entries
-      case 'pennylane_get_ledger_entries': {
-        const { start_date, end_date, per_page = 50 } = args;
-        const data = await pennylane(`/ledger_entries?start_date=${start_date}&end_date=${end_date}&per_page=${per_page}`);
-        return { start_date, end_date, entries: data };
-      }
-      
-      // 5. List Customer Invoices
+      // 2. List Customer Invoices
       case 'pennylane_list_customer_invoices': {
-        const { start_date, end_date, status, per_page = 50 } = args;
-        let url = `/customer_invoices?per_page=${per_page}`;
-        if (start_date) url += `&start_date=${start_date}`;
-        if (end_date) url += `&end_date=${end_date}`;
-        if (status) url += `&status=${status}`;
+        const { start_date, end_date, limit = 50 } = args;
+        
+        // Construire filtres
+        const filters = [];
+        if (start_date) {
+          filters.push({ field: 'date', operator: 'gteq', value: start_date });
+        }
+        if (end_date) {
+          filters.push({ field: 'date', operator: 'lteq', value: end_date });
+        }
+        
+        let url = `/customer_invoices?limit=${limit}`;
+        if (filters.length > 0) {
+          url += `&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+        }
+        
         const data = await pennylane(url);
-        return { filters: { start_date, end_date, status }, invoices: data };
-      }
-      
-      // 6. Get Customer Invoice
-      case 'pennylane_get_customer_invoice': {
-        const { invoice_id } = args;
-        const data = await pennylane(`/customer_invoices/${invoice_id}`);
-        return { invoice: data };
-      }
-      
-      // 7. Analyze Customer Invoices
-      case 'pennylane_analyze_customer_invoices': {
-        const { start_date, end_date } = args;
-        const response = await pennylane(`/customer_invoices?start_date=${start_date}&end_date=${end_date}&per_page=100`);
-        const invoices = response.invoices || response || [];
-        
-        const analysis = {
-          period: { start_date, end_date },
-          total_invoices: invoices.length,
-          total_revenue: invoices.reduce((sum, inv) => sum + (inv.amount || 0), 0),
-          paid_invoices: invoices.filter(inv => inv.status === 'paid').length,
-          unpaid_invoices: invoices.filter(inv => ['pending', 'late'].includes(inv.status)).length,
-          average_amount: invoices.length > 0 ? invoices.reduce((sum, inv) => sum + (inv.amount || 0), 0) / invoices.length : 0,
-        };
-        
-        return analysis;
-      }
-      
-      // 8. List Supplier Invoices
-      case 'pennylane_list_supplier_invoices': {
-        const { start_date, end_date, status, per_page = 50 } = args;
-        let url = `/supplier_invoices?per_page=${per_page}`;
-        if (start_date) url += `&start_date=${start_date}`;
-        if (end_date) url += `&end_date=${end_date}`;
-        if (status) url += `&status=${status}`;
-        const data = await pennylane(url);
-        return { filters: { start_date, end_date, status }, invoices: data };
-      }
-      
-      // 9. Get Supplier Invoice
-      case 'pennylane_get_supplier_invoice': {
-        const { invoice_id } = args;
-        const data = await pennylane(`/supplier_invoices/${invoice_id}`);
-        return { invoice: data };
-      }
-      
-      // 10. Analyze Supplier Invoices
-      case 'pennylane_analyze_supplier_invoices': {
-        const { start_date, end_date } = args;
-        const response = await pennylane(`/supplier_invoices?start_date=${start_date}&end_date=${end_date}&per_page=100`);
-        const invoices = response.invoices || response || [];
-        
-        const analysis = {
-          period: { start_date, end_date },
-          total_invoices: invoices.length,
-          total_expenses: invoices.reduce((sum, inv) => sum + (inv.amount || 0), 0),
-          paid_invoices: invoices.filter(inv => inv.status === 'paid').length,
-          unpaid_invoices: invoices.filter(inv => ['pending', 'late'].includes(inv.status)).length,
-          average_amount: invoices.length > 0 ? invoices.reduce((sum, inv) => sum + (inv.amount || 0), 0) / invoices.length : 0,
-        };
-        
-        return analysis;
-      }
-      
-      // 11. List Transactions
-      case 'pennylane_list_transactions': {
-        const { start_date, end_date, bank_account_id, matched, per_page = 50 } = args;
-        let url = `/transactions?per_page=${per_page}`;
-        if (start_date) url += `&start_date=${start_date}`;
-        if (end_date) url += `&end_date=${end_date}`;
-        if (bank_account_id) url += `&bank_account_id=${bank_account_id}`;
-        if (matched !== undefined) url += `&matched=${matched}`;
-        const data = await pennylane(url);
-        return { filters: { start_date, end_date, bank_account_id, matched }, transactions: data };
-      }
-      
-      // 12. Bank Reconciliation Status
-      case 'pennylane_get_bank_reconciliation_status': {
-        const { bank_account_id } = args;
-        let url = '/transactions?per_page=1';
-        if (bank_account_id) url += `&bank_account_id=${bank_account_id}`;
-        
-        const matchedResponse = await pennylane(url + '&matched=true');
-        const unmatchedResponse = await pennylane(url + '&matched=false');
+        const invoices = data.items || data.invoices || data || [];
         
         return {
-          bank_account_id: bank_account_id || 'all',
-          matched_transactions: matchedResponse.total || 0,
-          unmatched_transactions: unmatchedResponse.total || 0,
-          reconciliation_rate: matchedResponse.total / (matchedResponse.total + unmatchedResponse.total) * 100,
+          filters: { start_date, end_date },
+          count: invoices.length,
+          invoices,
         };
       }
       
-      // 13. List Categories
-      case 'pennylane_list_categories': {
-        const data = await pennylane('/categories');
-        return { categories: data };
-      }
-      
-      // 14. Analytical Report
-      case 'pennylane_get_analytical_report': {
-        const { start_date, end_date, category_id } = args;
-        let url = `/analytical_report?start_date=${start_date}&end_date=${end_date}`;
-        if (category_id) url += `&category_id=${category_id}`;
+      // 3. Analyze Customer Invoices
+      case 'pennylane_analyze_customer_invoices': {
+        const { start_date, end_date } = args;
+        
+        const filters = [
+          { field: 'date', operator: 'gteq', value: start_date },
+          { field: 'date', operator: 'lteq', value: end_date },
+        ];
+        
+        const url = `/customer_invoices?limit=100&filters=${encodeURIComponent(JSON.stringify(filters))}`;
         const data = await pennylane(url);
-        return { period: { start_date, end_date }, category_id, report: data };
+        const invoices = data.items || data.invoices || data || [];
+        
+        // Calculer statistiques
+        const totalRevenue = invoices.reduce((sum, inv) => {
+          const amount = inv.amount || inv.total_amount || 0;
+          return sum + amount;
+        }, 0);
+        
+        const paidInvoices = invoices.filter(inv => 
+          inv.status === 'paid' || inv.payment_status === 'paid'
+        );
+        
+        const unpaidInvoices = invoices.filter(inv => 
+          ['pending', 'late', 'unpaid'].includes(inv.status || inv.payment_status)
+        );
+        
+        return {
+          period: { start_date, end_date },
+          summary: {
+            total_invoices: invoices.length,
+            total_revenue: totalRevenue,
+            average_invoice_amount: invoices.length > 0 ? totalRevenue / invoices.length : 0,
+          },
+          payment_status: {
+            paid: paidInvoices.length,
+            unpaid: unpaidInvoices.length,
+            paid_amount: paidInvoices.reduce((sum, inv) => sum + (inv.amount || inv.total_amount || 0), 0),
+            unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + (inv.amount || inv.total_amount || 0), 0),
+          },
+          invoices: invoices.slice(0, 10), // Retourner top 10 pour exemple
+        };
       }
       
-      // 15. User Context
+      // 4. Get Customer Invoice
+      case 'pennylane_get_customer_invoice': {
+        const { invoice_id } = args;
+        const invoice = await pennylane(`/customer_invoices/${invoice_id}`);
+        return { invoice };
+      }
+      
+      // 5. List Supplier Invoices
+      case 'pennylane_list_supplier_invoices': {
+        const { start_date, end_date, limit = 50 } = args;
+        
+        const filters = [];
+        if (start_date) {
+          filters.push({ field: 'date', operator: 'gteq', value: start_date });
+        }
+        if (end_date) {
+          filters.push({ field: 'date', operator: 'lteq', value: end_date });
+        }
+        
+        let url = `/supplier_invoices?limit=${limit}`;
+        if (filters.length > 0) {
+          url += `&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+        }
+        
+        const data = await pennylane(url);
+        const invoices = data.items || data.invoices || data || [];
+        
+        return {
+          filters: { start_date, end_date },
+          count: invoices.length,
+          invoices,
+        };
+      }
+      
+      // 6. Analyze Supplier Invoices
+      case 'pennylane_analyze_supplier_invoices': {
+        const { start_date, end_date } = args;
+        
+        const filters = [
+          { field: 'date', operator: 'gteq', value: start_date },
+          { field: 'date', operator: 'lteq', value: end_date },
+        ];
+        
+        const url = `/supplier_invoices?limit=100&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+        const data = await pennylane(url);
+        const invoices = data.items || data.invoices || data || [];
+        
+        const totalExpenses = invoices.reduce((sum, inv) => {
+          const amount = inv.amount || inv.total_amount || 0;
+          return sum + amount;
+        }, 0);
+        
+        const paidInvoices = invoices.filter(inv => 
+          inv.status === 'paid' || inv.payment_status === 'paid'
+        );
+        
+        const unpaidInvoices = invoices.filter(inv => 
+          ['pending', 'late', 'unpaid'].includes(inv.status || inv.payment_status)
+        );
+        
+        return {
+          period: { start_date, end_date },
+          summary: {
+            total_invoices: invoices.length,
+            total_expenses: totalExpenses,
+            average_invoice_amount: invoices.length > 0 ? totalExpenses / invoices.length : 0,
+          },
+          payment_status: {
+            paid: paidInvoices.length,
+            unpaid: unpaidInvoices.length,
+            paid_amount: paidInvoices.reduce((sum, inv) => sum + (inv.amount || inv.total_amount || 0), 0),
+            unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + (inv.amount || inv.total_amount || 0), 0),
+          },
+          invoices: invoices.slice(0, 10),
+        };
+      }
+      
+      // 7. Get Supplier Invoice
+      case 'pennylane_get_supplier_invoice': {
+        const { invoice_id } = args;
+        const invoice = await pennylane(`/supplier_invoices/${invoice_id}`);
+        return { invoice };
+      }
+      
+      // 8. List Transactions
+      case 'pennylane_list_transactions': {
+        const { start_date, end_date, limit = 50 } = args;
+        
+        const filters = [];
+        if (start_date) {
+          filters.push({ field: 'date', operator: 'gteq', value: start_date });
+        }
+        if (end_date) {
+          filters.push({ field: 'date', operator: 'lteq', value: end_date });
+        }
+        
+        let url = `/transactions?limit=${limit}`;
+        if (filters.length > 0) {
+          url += `&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+        }
+        
+        const data = await pennylane(url);
+        const transactions = data.items || data.transactions || data || [];
+        
+        return {
+          filters: { start_date, end_date },
+          count: transactions.length,
+          transactions,
+        };
+      }
+      
+      // 9. Get Customers
+      case 'pennylane_get_customers': {
+        const { limit = 50 } = args;
+        const data = await pennylane(`/customers?limit=${limit}`);
+        const customers = data.items || data.customers || data || [];
+        
+        return {
+          count: customers.length,
+          customers,
+        };
+      }
+      
+      // 10. User Context
       case 'pennylane_get_user_context': {
         const user = await pennylane('/me');
         const fiscalYears = await pennylane('/fiscal_years');
