@@ -1,5 +1,5 @@
 // MCP Server Pennylane - Owl Agency
-// MVP Phase 1 - 15 tools comptabilité
+// 15 Tools - API v2 External (confirmed endpoints only)
 
 const TOKEN = process.env.PENNYLANE_API_TOKEN;
 const BASE_URL = process.env.PENNYLANE_API_BASE_URL || 'https://app.pennylane.com/api/external/v2';
@@ -31,13 +31,13 @@ async function pennylane(endpoint, options = {}) {
 }
 
 // ============================================
-// MCP TOOLS DEFINITIONS
+// MCP TOOLS DEFINITIONS (15 tools)
 // ============================================
 
 const TOOLS = [
   {
     name: 'pennylane_health_check',
-    description: 'Vérifier le statut global de la comptabilité Owl Agency via Pennylane. Retourne connexion API, exercices fiscaux, dernières transactions et alertes.',
+    description: 'Vérifier le statut global de la comptabilité Owl Agency via Pennylane. Retourne connexion API, exercices fiscaux, dernières transactions et alertes (transactions non rapprochées).',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -133,6 +133,60 @@ const TOOLS = [
     },
   },
   {
+    name: 'pennylane_get_suppliers',
+    description: 'Lister tous les fournisseurs (suppliers) enregistrés dans Pennylane.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
+      },
+    },
+  },
+  {
+    name: 'pennylane_list_categories',
+    description: 'Lister toutes les catégories comptables analytiques (categories). Utile pour l\'organisation et l\'analyse par projet/service.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
+      },
+    },
+  },
+  {
+    name: 'pennylane_list_ledger_entries',
+    description: 'Lister les écritures comptables (ledger entries) pour une période donnée. Utile pour audits et analyses détaillées.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
+      },
+    },
+  },
+  {
+    name: 'pennylane_list_products',
+    description: 'Lister tous les produits/services (products) du catalogue Pennylane.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
+      },
+    },
+  },
+  {
+    name: 'pennylane_list_quotes',
+    description: 'Lister les devis (quotes/estimates) avec filtres optionnels par date.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
+        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
+        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
+      },
+    },
+  },
+  {
     name: 'pennylane_get_user_context',
     description: 'Obtenir le contexte utilisateur actuel : profil, entreprise, exercices fiscaux.',
     inputSchema: { type: 'object', properties: {}, required: [] },
@@ -153,8 +207,8 @@ async function executeTool(name, args = {}) {
         const user = await pennylane('/me');
         const fiscalYears = await pennylane('/fiscal_years');
         
-        // Récupérer transactions récentes (avec filtres)
-        const txData = await pennylane('/transactions?limit=5&sort=-date');
+        // Récupérer transactions récentes
+        const txData = await pennylane('/transactions?limit=5');
         const transactions = txData.items || txData.transactions || txData || [];
         
         return {
@@ -178,7 +232,6 @@ async function executeTool(name, args = {}) {
       case 'pennylane_list_customer_invoices': {
         const { start_date, end_date, limit = 50 } = args;
         
-        // Construire filtres
         const filters = [];
         if (start_date) {
           filters.push({ field: 'date', operator: 'gteq', value: start_date });
@@ -189,7 +242,7 @@ async function executeTool(name, args = {}) {
         
         let url = `/customer_invoices?limit=${limit}`;
         if (filters.length > 0) {
-          url += `&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+          url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         }
         
         const data = await pennylane(url);
@@ -211,13 +264,13 @@ async function executeTool(name, args = {}) {
           { field: 'date', operator: 'lteq', value: end_date },
         ];
         
-        const url = `/customer_invoices?limit=100&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+        const url = `/customer_invoices?limit=100&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         const data = await pennylane(url);
         const invoices = data.items || data.invoices || data || [];
         
         // Calculer statistiques
         const totalRevenue = invoices.reduce((sum, inv) => {
-          const amount = inv.amount || inv.total_amount || 0;
+          const amount = parseFloat(inv.amount || inv.total_amount || 0);
           return sum + amount;
         }, 0);
         
@@ -239,10 +292,10 @@ async function executeTool(name, args = {}) {
           payment_status: {
             paid: paidInvoices.length,
             unpaid: unpaidInvoices.length,
-            paid_amount: paidInvoices.reduce((sum, inv) => sum + (inv.amount || inv.total_amount || 0), 0),
-            unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + (inv.amount || inv.total_amount || 0), 0),
+            paid_amount: paidInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0),
+            unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0),
           },
-          invoices: invoices.slice(0, 10), // Retourner top 10 pour exemple
+          invoices: invoices.slice(0, 10),
         };
       }
       
@@ -267,7 +320,7 @@ async function executeTool(name, args = {}) {
         
         let url = `/supplier_invoices?limit=${limit}`;
         if (filters.length > 0) {
-          url += `&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+          url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         }
         
         const data = await pennylane(url);
@@ -289,12 +342,12 @@ async function executeTool(name, args = {}) {
           { field: 'date', operator: 'lteq', value: end_date },
         ];
         
-        const url = `/supplier_invoices?limit=100&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+        const url = `/supplier_invoices?limit=100&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         const data = await pennylane(url);
         const invoices = data.items || data.invoices || data || [];
         
         const totalExpenses = invoices.reduce((sum, inv) => {
-          const amount = inv.amount || inv.total_amount || 0;
+          const amount = parseFloat(inv.amount || inv.total_amount || 0);
           return sum + amount;
         }, 0);
         
@@ -316,8 +369,8 @@ async function executeTool(name, args = {}) {
           payment_status: {
             paid: paidInvoices.length,
             unpaid: unpaidInvoices.length,
-            paid_amount: paidInvoices.reduce((sum, inv) => sum + (inv.amount || inv.total_amount || 0), 0),
-            unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + (inv.amount || inv.total_amount || 0), 0),
+            paid_amount: paidInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0),
+            unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0),
           },
           invoices: invoices.slice(0, 10),
         };
@@ -344,7 +397,7 @@ async function executeTool(name, args = {}) {
         
         let url = `/transactions?limit=${limit}`;
         if (filters.length > 0) {
-          url += `&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+          url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         }
         
         const data = await pennylane(url);
@@ -369,7 +422,97 @@ async function executeTool(name, args = {}) {
         };
       }
       
-      // 10. User Context
+      // 10. Get Suppliers
+      case 'pennylane_get_suppliers': {
+        const { limit = 50 } = args;
+        const data = await pennylane(`/suppliers?limit=${limit}`);
+        const suppliers = data.items || data.suppliers || data || [];
+        
+        return {
+          count: suppliers.length,
+          suppliers,
+        };
+      }
+      
+      // 11. List Categories
+      case 'pennylane_list_categories': {
+        const { limit = 50 } = args;
+        const data = await pennylane(`/categories?limit=${limit}`);
+        const categories = data.items || data.categories || data || [];
+        
+        return {
+          count: categories.length,
+          categories,
+        };
+      }
+      
+      // 12. List Ledger Entries
+      case 'pennylane_list_ledger_entries': {
+        const { start_date, end_date, limit = 50 } = args;
+        
+        const filters = [];
+        if (start_date) {
+          filters.push({ field: 'date', operator: 'gteq', value: start_date });
+        }
+        if (end_date) {
+          filters.push({ field: 'date', operator: 'lteq', value: end_date });
+        }
+        
+        let url = `/ledger_entries?limit=${limit}`;
+        if (filters.length > 0) {
+          url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
+        }
+        
+        const data = await pennylane(url);
+        const entries = data.items || data.ledger_entries || data || [];
+        
+        return {
+          filters: { start_date, end_date },
+          count: entries.length,
+          entries,
+        };
+      }
+      
+      // 13. List Products
+      case 'pennylane_list_products': {
+        const { limit = 50 } = args;
+        const data = await pennylane(`/products?limit=${limit}`);
+        const products = data.items || data.products || data || [];
+        
+        return {
+          count: products.length,
+          products,
+        };
+      }
+      
+      // 14. List Quotes
+      case 'pennylane_list_quotes': {
+        const { start_date, end_date, limit = 50 } = args;
+        
+        const filters = [];
+        if (start_date) {
+          filters.push({ field: 'date', operator: 'gteq', value: start_date });
+        }
+        if (end_date) {
+          filters.push({ field: 'date', operator: 'lteq', value: end_date });
+        }
+        
+        let url = `/quotes?limit=${limit}`;
+        if (filters.length > 0) {
+          url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
+        }
+        
+        const data = await pennylane(url);
+        const quotes = data.items || data.quotes || data || [];
+        
+        return {
+          filters: { start_date, end_date },
+          count: quotes.length,
+          quotes,
+        };
+      }
+      
+      // 15. User Context
       case 'pennylane_get_user_context': {
         const user = await pennylane('/me');
         const fiscalYears = await pennylane('/fiscal_years');
@@ -485,6 +628,7 @@ export async function GET() {
     name: 'mcp-pennylane-owl',
     version: '1.0.0',
     status: 'running',
+    api_version: 'v2 external',
     tools_count: TOOLS.length,
     tools: TOOLS.map(t => t.name),
   });
