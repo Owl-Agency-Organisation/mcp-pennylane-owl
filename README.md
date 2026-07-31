@@ -46,7 +46,9 @@ serveur renvoie celle demandée par le client si elle figure dans cette liste.
    Pennylane pour le chemin exact, qui évolue avec l'interface.
 2. **Un compte Vercel** (l'offre gratuite suffit), ou n'importe quel
    hébergeur capable de faire tourner une application Next.js 15.
-3. **Node.js 20+** si vous voulez lancer les tests ou le serveur en local.
+3. **Node.js 22+** si vous voulez lancer les tests ou le serveur en local. Le
+   script de test s'appuie sur les motifs glob de `node --test`, disponibles à
+   partir de Node 21.
 
 ## Déploiement
 
