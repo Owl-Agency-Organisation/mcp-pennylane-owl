@@ -1,11 +1,71 @@
 // MCP Server Pennylane - Owl Agency
-// v1.1.0 - 21 Tools - API v2 External
+// v1.2.0 - 21 Tools - API v2 External
+
+const SERVER_VERSION = '1.2.0';
 
 const TOKEN = process.env.PENNYLANE_API_TOKEN;
 const BASE_URL = process.env.PENNYLANE_API_BASE_URL || 'https://app.pennylane.com/api/external/v2';
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
 
 if (!TOKEN) {
   console.error('[Pennylane] Token manquant!');
+}
+
+if (!MCP_AUTH_TOKEN) {
+  console.error('[MCP] MCP_AUTH_TOKEN manquant : le serveur refusera toutes les requetes.');
+}
+
+// Revisions du protocole MCP que ce serveur sait servir, de la plus recente
+// a la plus ancienne. On renvoie celle demandee par le client si on la
+// connait, sinon la plus recente.
+const SUPPORTED_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+
+// ============================================
+// HELPERS
+// ============================================
+
+// Comparaison a temps constant, sans dependance a node:crypto (le runtime
+// de la route peut etre node ou edge selon la config Vercel).
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const encoder = new TextEncoder();
+  const aBytes = encoder.encode(a);
+  const bBytes = encoder.encode(b);
+  if (aBytes.length !== bBytes.length) return false;
+  let diff = 0;
+  for (let i = 0; i < aBytes.length; i++) diff |= aBytes[i] ^ bBytes[i];
+  return diff === 0;
+}
+
+// Le token peut arriver via `Authorization: Bearer ...` (standard MCP) ou
+// via `X-MCP-Token` pour les clients qui ne laissent pas personnaliser
+// l'en-tete Authorization.
+function isAuthorized(request) {
+  if (!MCP_AUTH_TOKEN) return false;
+  const authHeader = request.headers.get('authorization') || '';
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (bearer && safeEqual(bearer, MCP_AUTH_TOKEN)) return true;
+  const custom = (request.headers.get('x-mcp-token') || '').trim();
+  return Boolean(custom) && safeEqual(custom, MCP_AUTH_TOKEN);
+}
+
+// L'API Pennylane renvoie tantot un tableau brut, tantot un objet pagine.
+// Cette normalisation evite les `.length` / `.find()` sur un objet.
+function asArray(data, ...keys) {
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') {
+    for (const key of ['items', ...keys]) {
+      if (Array.isArray(data[key])) return data[key];
+    }
+  }
+  return [];
+}
+
+// L'API plafonne la pagination a 100 elements par page.
+function clampLimit(limit, fallback = 50) {
+  const parsed = Number(limit);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(100, Math.max(1, Math.floor(parsed)));
 }
 
 // ============================================
@@ -42,7 +102,7 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   
-  // FACTURES CLIENTS (3)
+  // FACTURES CLIENTS (4)
   {
     name: 'pennylane_list_customer_invoices',
     description: 'Lister les factures clients avec filtres par date. Essentiel pour le suivi du CA.',
@@ -282,10 +342,11 @@ async function executeTool(name, args = {}) {
     switch (name) {
       case 'pennylane_health_check': {
         const user = await pennylane('/me');
-        const fiscalYears = await pennylane('/fiscal_years');
+        const fiscalYearsData = await pennylane('/fiscal_years');
+        const fiscalYears = asArray(fiscalYearsData, 'fiscal_years');
         const txData = await pennylane('/transactions?limit=5');
-        const transactions = txData.items || txData.transactions || txData || [];
-        
+        const transactions = asArray(txData, 'transactions');
+
         return {
           status: 'ok',
           timestamp: new Date().toISOString(),
@@ -294,7 +355,7 @@ async function executeTool(name, args = {}) {
           },
           fiscalYears: {
             total: fiscalYears.length,
-            current: fiscalYears.find(f => f.status === 'open'),
+            current: fiscalYears.find(f => f.status === 'open') || null,
           },
           recentActivity: {
             lastTransactions: transactions.length,
@@ -309,11 +370,11 @@ async function executeTool(name, args = {}) {
         if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
         if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
         
-        let url = `/customer_invoices?limit=${limit}`;
+        let url = `/customer_invoices?limit=${clampLimit(limit)}`;
         if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         
         const data = await pennylane(url);
-        const invoices = data.items || data.invoices || data || [];
+        const invoices = asArray(data, 'invoices');
         return { filters: { start_date, end_date }, count: invoices.length, invoices };
       }
       
@@ -326,7 +387,7 @@ async function executeTool(name, args = {}) {
         
         const url = `/customer_invoices?limit=100&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         const data = await pennylane(url);
-        const invoices = data.items || data.invoices || data || [];
+        const invoices = asArray(data, 'invoices');
         
         const totalRevenue = invoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0);
         const paidInvoices = invoices.filter(inv => inv.status === 'paid' || inv.payment_status === 'paid');
@@ -358,7 +419,7 @@ async function executeTool(name, args = {}) {
       case 'pennylane_get_customer_invoice_matched_transactions': {
         const { invoice_id } = args;
         const data = await pennylane(`/customer_invoices/${invoice_id}/matched_transactions`);
-        const transactions = data.items || data.matched_transactions || data || [];
+        const transactions = asArray(data, 'matched_transactions');
         return {
           invoice_id,
           matched_transactions_count: transactions.length,
@@ -372,11 +433,11 @@ async function executeTool(name, args = {}) {
         if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
         if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
         
-        let url = `/supplier_invoices?limit=${limit}`;
+        let url = `/supplier_invoices?limit=${clampLimit(limit)}`;
         if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         
         const data = await pennylane(url);
-        const invoices = data.items || data.invoices || data || [];
+        const invoices = asArray(data, 'invoices');
         return { filters: { start_date, end_date }, count: invoices.length, invoices };
       }
       
@@ -389,7 +450,7 @@ async function executeTool(name, args = {}) {
         
         const url = `/supplier_invoices?limit=100&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         const data = await pennylane(url);
-        const invoices = data.items || data.invoices || data || [];
+        const invoices = asArray(data, 'invoices');
         
         const totalExpenses = invoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0);
         const paidInvoices = invoices.filter(inv => inv.status === 'paid' || inv.payment_status === 'paid');
@@ -424,39 +485,39 @@ async function executeTool(name, args = {}) {
         if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
         if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
         
-        let url = `/transactions?limit=${limit}`;
+        let url = `/transactions?limit=${clampLimit(limit)}`;
         if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         
         const data = await pennylane(url);
-        const transactions = data.items || data.transactions || data || [];
+        const transactions = asArray(data, 'transactions');
         return { filters: { start_date, end_date }, count: transactions.length, transactions };
       }
       
       case 'pennylane_list_bank_accounts': {
         const { limit = 50 } = args;
-        const data = await pennylane(`/bank_accounts?limit=${limit}`);
-        const accounts = data.items || data.bank_accounts || data || [];
+        const data = await pennylane(`/bank_accounts?limit=${clampLimit(limit)}`);
+        const accounts = asArray(data, 'bank_accounts');
         return { count: accounts.length, bank_accounts: accounts };
       }
       
       case 'pennylane_get_customers': {
         const { limit = 50 } = args;
-        const data = await pennylane(`/customers?limit=${limit}`);
-        const customers = data.items || data.customers || data || [];
+        const data = await pennylane(`/customers?limit=${clampLimit(limit)}`);
+        const customers = asArray(data, 'customers');
         return { count: customers.length, customers };
       }
       
       case 'pennylane_get_suppliers': {
         const { limit = 50 } = args;
-        const data = await pennylane(`/suppliers?limit=${limit}`);
-        const suppliers = data.items || data.suppliers || data || [];
+        const data = await pennylane(`/suppliers?limit=${clampLimit(limit)}`);
+        const suppliers = asArray(data, 'suppliers');
         return { count: suppliers.length, suppliers };
       }
       
       case 'pennylane_list_categories': {
         const { limit = 50 } = args;
-        const data = await pennylane(`/categories?limit=${limit}`);
-        const categories = data.items || data.categories || data || [];
+        const data = await pennylane(`/categories?limit=${clampLimit(limit)}`);
+        const categories = asArray(data, 'categories');
         return { count: categories.length, categories };
       }
       
@@ -466,32 +527,32 @@ async function executeTool(name, args = {}) {
         if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
         if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
         
-        let url = `/ledger_entries?limit=${limit}`;
+        let url = `/ledger_entries?limit=${clampLimit(limit)}`;
         if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         
         const data = await pennylane(url);
-        const entries = data.items || data.ledger_entries || data || [];
+        const entries = asArray(data, 'ledger_entries');
         return { filters: { start_date, end_date }, count: entries.length, entries };
       }
       
       case 'pennylane_list_products': {
         const { limit = 50 } = args;
-        const data = await pennylane(`/products?limit=${limit}`);
-        const products = data.items || data.products || data || [];
+        const data = await pennylane(`/products?limit=${clampLimit(limit)}`);
+        const products = asArray(data, 'products');
         return { count: products.length, products };
       }
       
       case 'pennylane_list_journals': {
         const { limit = 50 } = args;
-        const data = await pennylane(`/journals?limit=${limit}`);
-        const journals = data.items || data.journals || data || [];
+        const data = await pennylane(`/journals?limit=${clampLimit(limit)}`);
+        const journals = asArray(data, 'journals');
         return { count: journals.length, journals };
       }
       
       case 'pennylane_list_ledger_accounts': {
         const { limit = 50 } = args;
-        const data = await pennylane(`/ledger_accounts?limit=${limit}`);
-        const accounts = data.items || data.ledger_accounts || data || [];
+        const data = await pennylane(`/ledger_accounts?limit=${clampLimit(limit)}`);
+        const accounts = asArray(data, 'ledger_accounts');
         return { count: accounts.length, ledger_accounts: accounts };
       }
       
@@ -501,17 +562,18 @@ async function executeTool(name, args = {}) {
         if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
         if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
         
-        let url = `/quotes?limit=${limit}`;
+        let url = `/quotes?limit=${clampLimit(limit)}`;
         if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
         
         const data = await pennylane(url);
-        const quotes = data.items || data.quotes || data || [];
+        const quotes = asArray(data, 'quotes');
         return { filters: { start_date, end_date }, count: quotes.length, quotes };
       }
       
       case 'pennylane_get_user_context': {
         const user = await pennylane('/me');
-        const fiscalYears = await pennylane('/fiscal_years');
+        const fiscalYearsData = await pennylane('/fiscal_years');
+        const fiscalYears = asArray(fiscalYearsData, 'fiscal_years');
         const company = user.company || {};
         
         return {
@@ -527,14 +589,14 @@ async function executeTool(name, args = {}) {
             vat_number: company.vat_number,
           },
           fiscal_years: fiscalYears,
-          current_fiscal_year: fiscalYears.find(f => f.status === 'open'),
+          current_fiscal_year: fiscalYears.find(f => f.status === 'open') || null,
         };
       }
       
       case 'pennylane_list_fiscal_years': {
         const { limit = 50 } = args;
-        const data = await pennylane(`/fiscal_years?limit=${limit}`);
-        const fiscalYears = Array.isArray(data) ? data : (data.items || data.fiscal_years || []);
+        const data = await pennylane(`/fiscal_years?limit=${clampLimit(limit)}`);
+        const fiscalYears = asArray(data, 'fiscal_years');
         return { count: fiscalYears.length, fiscal_years: fiscalYears };
       }
       
@@ -557,7 +619,10 @@ async function executeTool(name, args = {}) {
     }
   } catch (error) {
     console.error(`[MCP] Tool error:`, error);
+    // __mcpError sert uniquement au handler pour positionner `isError`,
+    // il est retire avant serialisation.
     return {
+      __mcpError: true,
       error: true,
       message: error.message,
       tool: name,
@@ -569,36 +634,59 @@ async function executeTool(name, args = {}) {
 // MCP PROTOCOL HANDLER
 // ============================================
 
+function unauthorized() {
+  return Response.json(
+    {
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32001, message: 'Unauthorized' },
+    },
+    { status: 401, headers: { 'WWW-Authenticate': 'Bearer realm="mcp-pennylane-owl"' } },
+  );
+}
+
 export async function POST(request) {
+  if (!isAuthorized(request)) {
+    console.warn('[MCP] Requete refusee : token absent ou invalide.');
+    return unauthorized();
+  }
+
   try {
     const { jsonrpc, id, method, params } = await request.json();
-    
+
     console.log(`[MCP] ${method}`);
-    
+
     if (jsonrpc !== '2.0') {
       return Response.json({
         jsonrpc: '2.0',
-        id,
+        id: id ?? null,
         error: { code: -32600, message: 'Invalid JSON-RPC' },
       });
     }
-    
+
+    // Une notification JSON-RPC n'a pas d'id et ne doit recevoir aucune
+    // reponse : 202 sans corps.
+    if (typeof method === 'string' && method.startsWith('notifications/')) {
+      return new Response(null, { status: 202 });
+    }
+
     if (method === 'initialize') {
+      const requested = params?.protocolVersion;
+      const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
+        ? requested
+        : SUPPORTED_PROTOCOL_VERSIONS[0];
+
       return Response.json({
         jsonrpc: '2.0',
         id,
         result: {
-          protocolVersion: '2024-11-05',
+          protocolVersion,
           capabilities: { tools: {} },
-          serverInfo: { name: 'mcp-pennylane-owl', version: '1.1.0' },
+          serverInfo: { name: 'mcp-pennylane-owl', version: SERVER_VERSION },
         },
       });
     }
-    
-    if (method === 'notifications/initialized') {
-      return Response.json({ jsonrpc: '2.0' });
-    }
-    
+
     if (method === 'tools/list') {
       return Response.json({
         jsonrpc: '2.0',
@@ -606,22 +694,34 @@ export async function POST(request) {
         result: { tools: TOOLS },
       });
     }
-    
+
     if (method === 'tools/call') {
-      const { name, arguments: toolArgs } = params;
-      const result = await executeTool(name, toolArgs || {});
+      const name = params?.name;
+      if (!name) {
+        return Response.json({
+          jsonrpc: '2.0',
+          id,
+          error: { code: -32602, message: 'Missing tool name' },
+        });
+      }
+
+      const result = await executeTool(name, params.arguments || {});
+      const isError = Boolean(result?.__mcpError);
+      if (isError) delete result.__mcpError;
+
       return Response.json({
         jsonrpc: '2.0',
         id,
         result: {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          isError,
         },
       });
     }
-    
+
     return Response.json({
       jsonrpc: '2.0',
-      id,
+      id: id ?? null,
       error: { code: -32601, message: `Unknown method: ${method}` },
     });
   } catch (error) {
@@ -634,12 +734,19 @@ export async function POST(request) {
   }
 }
 
-export async function GET() {
+// Ping public volontairement minimal : il ne revele ni la liste des tools
+// ni la configuration. Le detail exige le meme token que POST.
+export async function GET(request) {
+  if (!isAuthorized(request)) {
+    return Response.json({ name: 'mcp-pennylane-owl', status: 'running' });
+  }
+
   return Response.json({
     name: 'mcp-pennylane-owl',
-    version: '1.1.0',
+    version: SERVER_VERSION,
     status: 'running',
     api_version: 'v2 external',
+    pennylane_token_configured: Boolean(TOKEN),
     tools_count: TOOLS.length,
     tools: TOOLS.map(t => t.name),
   });
