@@ -1,9 +1,9 @@
 {
   "name": "mcp-pennylane-owl",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
-  "description": "Serveur MCP exposant la comptabilité Pennylane à un assistant IA. 21 tools en lecture seule, déployable sur Vercel.",
+  "description": "Serveur MCP exposant la comptabilité Pennylane à un assistant IA. 22 tools en lecture seule, déployable sur Vercel.",
   "keywords": [
     "mcp",
     "model-context-protocol",

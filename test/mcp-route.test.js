@@ -21,7 +21,11 @@ const realFetch = globalThis.fetch;
 
 before(() => {
   globalThis.fetch = async (url, init) => {
-    calls.push({ url: String(url), method: init?.method || 'GET' });
+    calls.push({
+      url: String(url),
+      method: init?.method || 'GET',
+      body: init?.body ? JSON.parse(init.body) : undefined,
+    });
     const body = respondWith(String(url));
     if (body === FAIL) {
       return { ok: false, status: 500, text: async () => 'erreur simulee' };
@@ -214,13 +218,13 @@ describe('protocole MCP', () => {
 });
 
 describe('catalogue de tools', () => {
-  it('expose 21 tools aux noms uniques et prefixes', async () => {
+  it('expose 22 tools aux noms uniques et prefixes', async () => {
     const { POST } = await loadRoute();
     const response = await POST(jsonRpcRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, AUTH));
     const { result } = await response.json();
     const names = result.tools.map(tool => tool.name);
 
-    assert.equal(result.tools.length, 21);
+    assert.equal(result.tools.length, 22);
     assert.equal(new Set(names).size, names.length);
     assert.ok(names.every(name => name.startsWith('pennylane_')));
   });
@@ -409,8 +413,8 @@ describe('GET', () => {
     const { GET } = await loadRoute();
     const body = await (await GET(new Request('https://exemple.test/api/mcp', { headers: AUTH }))).json();
 
-    assert.equal(body.tools_count, 21);
-    assert.equal(body.tools.length, 21);
+    assert.equal(body.tools_count, 22);
+    assert.equal(body.tools.length, 22);
     assert.equal(body.pennylane_token_configured, true);
   });
 
@@ -460,14 +464,192 @@ describe('appels sortants vers Pennylane', () => {
 
   it('utilise POST pour l export FEC', async () => {
     const { POST } = await loadRoute();
-    respondWith = () => ({ download_url: 'https://exemple.test/fec.txt' });
+    respondWith = () => ({ id: 124, status: 'pending', created_at: '2026-01-01T00:00:00Z' });
 
-    const { payload } = await callTool(POST, 'pennylane_export_fec', {
+    await callTool(POST, 'pennylane_export_fec', {
       start_date: '2026-01-01',
       end_date: '2026-12-31',
     });
 
     assert.equal(calls.at(-1).method, 'POST');
-    assert.equal(payload.download_url, 'https://exemple.test/fec.txt');
+  });
+});
+
+// Ces trois cas verrouillent des ecarts constates en confrontant le code au
+// schema OpenAPI officiel de la Company API v2.
+describe('conformite au schema OpenAPI Pennylane', () => {
+  describe('/me renvoie { user, company, scopes }', () => {
+    // Les champs de l'utilisateur sont imbriques sous `user`, pas a la racine.
+    const ME = {
+      user: { id: 12345, first_name: 'Jean', last_name: 'Martin', email: 'jean@exemple.test', locale: 'fr' },
+      company: { id: 999, name: 'Entreprise Test', reg_no: '123456789' },
+      scopes: ['customer_invoices', 'suppliers'],
+    };
+
+    it('health_check lit l email et la societe au bon niveau', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url => (url.includes('/me') ? ME : { items: [] });
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.connection.user.email, 'jean@exemple.test');
+      assert.equal(payload.connection.user.company, 'Entreprise Test');
+      assert.deepEqual(payload.connection.scopes, ['customer_invoices', 'suppliers']);
+    });
+
+    it('get_user_context lit l utilisateur imbrique', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url => (url.includes('/me') ? ME : { items: [] });
+
+      const { payload } = await callTool(POST, 'pennylane_get_user_context');
+
+      assert.equal(payload.user.id, 12345);
+      assert.equal(payload.user.email, 'jean@exemple.test');
+      assert.equal(payload.user.first_name, 'Jean');
+      assert.equal(payload.user.locale, 'fr');
+    });
+
+    it('get_user_context expose reg_no et non siret ou vat_number', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url => (url.includes('/me') ? ME : { items: [] });
+
+      const { payload } = await callTool(POST, 'pennylane_get_user_context');
+
+      assert.equal(payload.company.reg_no, '123456789');
+      assert.ok(!('siret' in payload.company));
+      assert.ok(!('vat_number' in payload.company));
+    });
+
+    it('get_user_context expose les scopes du token', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url => (url.includes('/me') ? ME : { items: [] });
+
+      const { payload } = await callTool(POST, 'pennylane_get_user_context');
+
+      assert.deepEqual(payload.scopes, ['customer_invoices', 'suppliers']);
+    });
+  });
+
+  describe('exercice fiscal courant', () => {
+    // Pennylane cree les exercices a venir a l'avance : plusieurs peuvent
+    // etre ouverts en meme temps, et l'API les renvoie du plus recent au
+    // plus ancien. Configuration reelle observee chez Owl Agency.
+    const today = new Date().toISOString().slice(0, 10);
+    const year = Number(today.slice(0, 4));
+    const exercice = (offset, status) => ({
+      id: year + offset,
+      start: `${year + offset}-01-01`,
+      finish: `${year + offset}-12-31`,
+      status,
+    });
+    const PLUSIEURS_OUVERTS = {
+      items: [exercice(2, 'open'), exercice(1, 'open'), exercice(0, 'open')],
+    };
+
+    it('retient l exercice qui contient la date du jour, pas le premier ouvert', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url => (url.includes('/fiscal_years') ? PLUSIEURS_OUVERTS : { items: [] });
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.fiscalYears.total, 3);
+      assert.equal(payload.fiscalYears.current.id, year, 'doit designer l exercice en cours');
+    });
+
+    it('applique la meme logique dans get_user_context', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url => (url.includes('/fiscal_years') ? PLUSIEURS_OUVERTS : { items: [] });
+
+      const { payload } = await callTool(POST, 'pennylane_get_user_context');
+
+      assert.equal(payload.current_fiscal_year.id, year);
+    });
+
+    it('se rabat sur un exercice ouvert si aucun ne couvre aujourd hui', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url =>
+        url.includes('/fiscal_years') ? { items: [exercice(5, 'open')] } : { items: [] };
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.fiscalYears.current.id, year + 5);
+    });
+
+    it('traite reopen comme un exercice ouvert dans le repli', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url =>
+        url.includes('/fiscal_years') ? { items: [exercice(5, 'reopen')] } : { items: [] };
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.fiscalYears.current.id, year + 5);
+    });
+
+    it('ignore un exercice gele qui ne couvre pas aujourd hui', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url =>
+        url.includes('/fiscal_years')
+          ? { items: [exercice(-2, 'frozen'), exercice(-1, 'closed')] }
+          : { items: [] };
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.fiscalYears.current, null);
+    });
+  });
+
+  describe('export FEC', () => {
+    it('cible /exports/fecs au pluriel', async () => {
+      const { POST } = await loadRoute();
+      respondWith = () => ({ id: 124, status: 'pending' });
+
+      await callTool(POST, 'pennylane_export_fec', { start_date: '2026-01-01', end_date: '2026-12-31' });
+
+      assert.ok(lastCallUrl().endsWith('/exports/fecs'), lastCallUrl());
+    });
+
+    it('envoie period_start et period_end, pas start_date et end_date', async () => {
+      const { POST } = await loadRoute();
+      respondWith = () => ({ id: 124, status: 'pending' });
+
+      await callTool(POST, 'pennylane_export_fec', { start_date: '2026-01-01', end_date: '2026-12-31' });
+
+      assert.deepEqual(calls.at(-1).body, { period_start: '2026-01-01', period_end: '2026-12-31' });
+    });
+
+    it('renvoie l identifiant d export, la generation etant asynchrone', async () => {
+      const { POST } = await loadRoute();
+      respondWith = () => ({ id: 124, status: 'pending', created_at: '2026-01-01T10:00:00Z' });
+
+      const { payload } = await callTool(POST, 'pennylane_export_fec', {
+        start_date: '2026-01-01',
+        end_date: '2026-12-31',
+      });
+
+      assert.equal(payload.export_id, 124);
+      assert.equal(payload.status, 'pending');
+      assert.ok(!('download_url' in payload));
+    });
+
+    it('recupere le fichier via get_fec_export une fois pret', async () => {
+      const { POST } = await loadRoute();
+      respondWith = () => ({ id: 124, status: 'ready', file_url: 'https://exemple.test/fec.txt' });
+
+      const { payload } = await callTool(POST, 'pennylane_get_fec_export', { export_id: '124' });
+
+      assert.ok(lastCallUrl().endsWith('/exports/fecs/124'), lastCallUrl());
+      assert.equal(payload.ready, true);
+      assert.equal(payload.file_url, 'https://exemple.test/fec.txt');
+    });
+
+    it('signale un export encore en cours sans URL de fichier', async () => {
+      const { POST } = await loadRoute();
+      respondWith = () => ({ id: 124, status: 'pending', file_url: null });
+
+      const { payload } = await callTool(POST, 'pennylane_get_fec_export', { export_id: '124' });
+
+      assert.equal(payload.ready, false);
+      assert.equal(payload.file_url, null);
+    });
   });
 });

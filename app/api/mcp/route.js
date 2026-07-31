@@ -1,8 +1,8 @@
-// Serveur MCP Pennylane — 21 tools sur l'API v2 external.
+// Serveur MCP Pennylane — 22 tools sur l'API v2 external.
 // Endpoint JSON-RPC unique, compatible avec tout client MCP parlant HTTP.
 // https://github.com/Owl-Agency-Organisation/mcp-pennylane-owl
 
-const SERVER_VERSION = '1.3.0';
+const SERVER_VERSION = '1.4.0';
 
 const TOKEN = process.env.PENNYLANE_API_TOKEN;
 const BASE_URL = process.env.PENNYLANE_API_BASE_URL || 'https://app.pennylane.com/api/external/v2';
@@ -62,6 +62,20 @@ function asArray(data, ...keys) {
   return [];
 }
 
+// Un exercice porte `start`, `finish` et un `status` parmi open, reopen,
+// closed, frozen. Plusieurs exercices peuvent etre ouverts simultanement :
+// Pennylane cree les exercices a venir a l'avance. Se contenter du premier
+// `open` de la liste designe donc un exercice futur comme etant le courant.
+// On cherche d'abord celui dont la periode contient la date du jour.
+// Les dates sont au format YYYY-MM-DD : la comparaison lexicographique
+// equivaut a la comparaison chronologique.
+function findCurrentFiscalYear(fiscalYears, today = new Date().toISOString().slice(0, 10)) {
+  const inRange = fiscalYears.find(f => f.start && f.finish && f.start <= today && today <= f.finish);
+  if (inRange) return inRange;
+  // Repli : aucun exercice ne couvre aujourd'hui (trou de parametrage).
+  return fiscalYears.find(f => f.status === 'open' || f.status === 'reopen') || null;
+}
+
 // L'API plafonne la pagination a 100 elements par page.
 function clampLimit(limit, fallback = 50) {
   const parsed = Number(limit);
@@ -92,7 +106,7 @@ async function pennylane(endpoint, options = {}) {
 }
 
 // ============================================
-// MCP TOOLS DEFINITIONS (21 tools)
+// MCP TOOLS DEFINITIONS (22 tools)
 // ============================================
 
 const TOOLS = [
@@ -302,7 +316,7 @@ const TOOLS = [
     },
   },
   
-  // CONTEXTE & EXPORTS (3)
+  // CONTEXTE & EXPORTS (4)
   {
     name: 'pennylane_get_user_context',
     description: 'Obtenir le contexte utilisateur actuel : profil, entreprise, exercices fiscaux.',
@@ -320,7 +334,7 @@ const TOOLS = [
   },
   {
     name: 'pennylane_export_fec',
-    description: 'Générer et télécharger l\'export FEC (Fichier des Écritures Comptables) pour une période. Obligatoire pour contrôles fiscaux en France.',
+    description: 'Lancer la génération d\'un export FEC (Fichier des Écritures Comptables) sur une période. Obligatoire pour les contrôles fiscaux en France. La génération est asynchrone : ce tool renvoie un export_id, puis pennylane_get_fec_export fournit le lien de téléchargement une fois l\'export prêt. Nécessite le scope "ledger".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -328,6 +342,17 @@ const TOOLS = [
         end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
       },
       required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'pennylane_get_fec_export',
+    description: 'Récupérer l\'état d\'un export FEC lancé par pennylane_export_fec, et son URL de téléchargement une fois le statut passé à "ready". Le lien expire au bout de 30 minutes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        export_id: { type: 'string', description: 'ID de l\'export renvoyé par pennylane_export_fec' },
+      },
+      required: ['export_id'],
     },
   },
 ];
@@ -342,7 +367,9 @@ async function executeTool(name, args = {}) {
   try {
     switch (name) {
       case 'pennylane_health_check': {
-        const user = await pennylane('/me');
+        // `/me` renvoie { user, company, scopes } : les champs de l'utilisateur
+        // sont imbriques, pas a la racine.
+        const me = await pennylane('/me');
         const fiscalYearsData = await pennylane('/fiscal_years');
         const fiscalYears = asArray(fiscalYearsData, 'fiscal_years');
         const txData = await pennylane('/transactions?limit=5');
@@ -352,11 +379,12 @@ async function executeTool(name, args = {}) {
           status: 'ok',
           timestamp: new Date().toISOString(),
           connection: {
-            user: { email: user.email, company: user.company?.name },
+            user: { email: me.user?.email, company: me.company?.name },
+            scopes: me.scopes ?? [],
           },
           fiscalYears: {
             total: fiscalYears.length,
-            current: fiscalYears.find(f => f.status === 'open') || null,
+            current: findCurrentFiscalYear(fiscalYears),
           },
           recentActivity: {
             lastTransactions: transactions.length,
@@ -572,25 +600,32 @@ async function executeTool(name, args = {}) {
       }
       
       case 'pennylane_get_user_context': {
-        const user = await pennylane('/me');
+        const me = await pennylane('/me');
         const fiscalYearsData = await pennylane('/fiscal_years');
         const fiscalYears = asArray(fiscalYearsData, 'fiscal_years');
-        const company = user.company || {};
-        
+        const user = me.user || {};
+        const company = me.company || {};
+
         return {
           user: {
             id: user.id,
             email: user.email,
             first_name: user.first_name,
             last_name: user.last_name,
+            locale: user.locale,
           },
           company: {
+            id: company.id,
             name: company.name,
-            siret: company.siret,
-            vat_number: company.vat_number,
+            // L'API expose `reg_no` (numero d'immatriculation), pas `siret`
+            // ni `vat_number`.
+            reg_no: company.reg_no,
           },
+          // Scopes du token : indispensable pour comprendre pourquoi un tool
+          // renvoie 403.
+          scopes: me.scopes ?? [],
           fiscal_years: fiscalYears,
-          current_fiscal_year: fiscalYears.find(f => f.status === 'open') || null,
+          current_fiscal_year: findCurrentFiscalYear(fiscalYears),
         };
       }
       
@@ -603,15 +638,31 @@ async function executeTool(name, args = {}) {
       
       case 'pennylane_export_fec': {
         const { start_date, end_date } = args;
-        const data = await pennylane(`/exports/fec`, {
+        // L'endpoint est `/exports/fecs` (pluriel) et attend `period_start` /
+        // `period_end`. La generation est asynchrone : ce POST cree l'export,
+        // le fichier se recupere ensuite via pennylane_get_fec_export.
+        const data = await pennylane('/exports/fecs', {
           method: 'POST',
-          body: { start_date, end_date },
+          body: { period_start: start_date, period_end: end_date },
         });
         return {
           period: { start_date, end_date },
-          export_status: 'generated',
-          download_url: data.download_url || data.url,
-          note: 'Utilisez le download_url pour télécharger le fichier FEC',
+          export_id: data.id,
+          status: data.status,
+          created_at: data.created_at,
+          note: "Generation asynchrone : appelez pennylane_get_fec_export avec cet export_id jusqu'a ce que le statut passe a \"ready\" pour obtenir l'URL de telechargement.",
+        };
+      }
+
+      case 'pennylane_get_fec_export': {
+        const { export_id } = args;
+        const data = await pennylane(`/exports/fecs/${export_id}`);
+        return {
+          export_id: data.id,
+          status: data.status,
+          // Le lien expire au bout de 30 minutes.
+          file_url: data.file_url ?? null,
+          ready: data.status === 'ready',
         };
       }
       

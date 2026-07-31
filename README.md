@@ -1,9 +1,12 @@
 # Serveur MCP Pennylane
 
 Expose la comptabilité [Pennylane](https://www.pennylane.com) à un assistant IA
-via le [Model Context Protocol](https://modelcontextprotocol.io). 21 tools en
+via le [Model Context Protocol](https://modelcontextprotocol.io). 22 tools en
 lecture seule : factures clients et fournisseurs, trésorerie, écritures, plan
 comptable, devis, export FEC.
+
+Les endpoints appelés sont vérifiés contre le schéma OpenAPI officiel de la
+Company API v2.
 
 Déployable sur Vercel en quelques minutes. Aucune dépendance en dehors de
 Next.js et React.
@@ -12,7 +15,7 @@ Next.js et React.
 - [Prérequis](#prérequis)
 - [Déploiement](#déploiement)
 - [Connexion d'un client MCP](#connexion-dun-client-mcp)
-- [Les 21 tools](#les-21-tools)
+- [Les 22 tools](#les-22-tools)
 - [Sécurité](#sécurité)
 - [Développement local](#développement-local)
 - [Dépannage](#dépannage)
@@ -149,19 +152,30 @@ Ces clients ne parlent pas HTTP directement. Passez par un pont :
 }
 ```
 
-## Les 21 tools
+## Les 22 tools
 
 Tous les tools sont en **lecture seule**. `pennylane_export_fec` est le seul à
-émettre un `POST` vers l'API Pennylane, pour générer un export téléchargeable.
+émettre un `POST` vers l'API Pennylane, pour demander la génération d'un export
+téléchargeable — il ne modifie aucune donnée comptable.
 
 La pagination est plafonnée à 100 éléments par appel (limite de l'API) : un
 `limit` supérieur est ramené à 100, une valeur invalide retombe sur 50.
+
+> **Limite connue** : les tools de liste ne renvoient que la **première page**.
+> L'API Pennylane pagine par curseur (`cursor` / `next_cursor`), que le serveur
+> n'exploite pas encore. Au-delà de 100 éléments, les résultats sont donc
+> tronqués sans avertissement.
 
 ### Monitoring
 
 | Tool | Paramètres | Description |
 | :--- | :--- | :--- |
 | `pennylane_health_check` | — | Statut global : connexion, exercices, dernières transactions |
+
+Plusieurs exercices fiscaux peuvent être ouverts simultanément — Pennylane crée
+les exercices à venir à l'avance. L'exercice signalé comme courant est celui
+dont la période contient la date du jour, et non le premier de la liste marqué
+`open`.
 
 ### Factures clients
 
@@ -216,9 +230,34 @@ La pagination est plafonnée à 100 éléments par appel (limite de l'API) : un
 | :--- | :--- | :--- |
 | `pennylane_get_user_context` | — | Profil, entreprise, exercices fiscaux |
 | `pennylane_list_fiscal_years` | `limit` | Exercices fiscaux |
-| `pennylane_export_fec` | `start_date`\*, `end_date`\* | Export FEC (contrôle fiscal français) |
+| `pennylane_export_fec` | `start_date`\*, `end_date`\* | Lance un export FEC (contrôle fiscal français), renvoie un `export_id` |
+| `pennylane_get_fec_export` | `export_id`\* | État de l'export et URL de téléchargement une fois prêt |
 
 \* paramètre obligatoire. Les dates sont au format `YYYY-MM-DD`.
+
+### Export FEC : un flux en deux temps
+
+La génération d'un FEC est asynchrone côté Pennylane. `pennylane_export_fec`
+crée la demande et renvoie un `export_id` avec un statut `pending`. Il faut
+ensuite appeler `pennylane_get_fec_export` avec cet identifiant jusqu'à ce que
+le statut passe à `ready` : la réponse contient alors `file_url`, **valable
+30 minutes**. Cet export requiert le scope `ledger`.
+
+### Scopes
+
+Le token Pennylane porte des scopes qui déterminent les endpoints accessibles.
+Un tool appelant une ressource hors scope échoue avec un message explicite du
+type `Access to this resource requires scope "ledger"`.
+`pennylane_get_user_context` et `pennylane_health_check` renvoient la liste des
+scopes du token : c'est le premier endroit à regarder devant un refus
+inexpliqué.
+
+> **Note de compatibilité** : l'API Pennylane déploie une série de changements
+> de rupture pilotés par le paramètre `use_2026_api_changes` (ou l'en-tête
+> `X-Use-2026-API-Changes`). Ce serveur ne le positionne pas et s'en remet donc
+> au défaut appliqué par Pennylane, susceptible d'évoluer au fil des phases de
+> déploiement. À figer explicitement avant que la phase de *sunset* ne
+> s'applique.
 
 ## Sécurité
 
@@ -262,7 +301,7 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-36 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+50 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 
