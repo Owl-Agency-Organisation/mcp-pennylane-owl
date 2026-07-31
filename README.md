@@ -34,6 +34,23 @@ X-MCP-Token: $MCP_AUTH_TOKEN
 Le `GET` sur l'endpoint sans token renvoie un ping minimal (`{name, status}`).
 Avec le token, il renvoie la version, le nombre de tools et leur liste.
 
+## Tests
+
+```bash
+npm test
+```
+
+36 tests sur le runner intégré de Node (`node --test`, aucune dépendance
+ajoutée). Ils exercent le handler directement, avec `fetch` mocké : aucun appel
+réel à Pennylane, aucun token nécessaire.
+
+Couverture : authentification (dont le fail-closed), négociation du protocole
+MCP, catalogue de tools et cohérence des `inputSchema`, normalisation des
+réponses de l'API, plafonnement de la pagination, remontée des erreurs, et
+format des requêtes sortantes.
+
+Les fichiers vivent dans `test/` et suivent la convention `*.test.js`.
+
 ## Tools (21)
 
 **Monitoring**
