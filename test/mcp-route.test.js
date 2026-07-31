@@ -250,7 +250,7 @@ describe('normalisation des reponses Pennylane', () => {
   it('gere un objet pagine pour fiscal_years dans health_check', async () => {
     const { POST } = await loadRoute();
     respondWith = url => {
-      if (url.includes('/me')) return { email: 'compta@owl.test', company: { name: 'Owl Agency' } };
+      if (url.includes('/me')) return { email: 'compta@exemple.test', company: { name: 'Entreprise Test' } };
       if (url.includes('/fiscal_years')) return { items: [{ id: 7, status: 'open' }] };
       if (url.includes('/transactions')) return { items: [{ date: '2026-01-05' }] };
       return {};
@@ -266,7 +266,7 @@ describe('normalisation des reponses Pennylane', () => {
   it('gere un objet pagine pour fiscal_years dans get_user_context', async () => {
     const { POST } = await loadRoute();
     respondWith = url => {
-      if (url.includes('/me')) return { id: 1, email: 'compta@owl.test', company: { name: 'Owl Agency' } };
+      if (url.includes('/me')) return { id: 1, email: 'compta@exemple.test', company: { name: 'Entreprise Test' } };
       if (url.includes('/fiscal_years')) return { items: [{ id: 7, status: 'open' }] };
       return {};
     };
@@ -308,7 +308,7 @@ describe('normalisation des reponses Pennylane', () => {
   it('ne plante pas sur un exercice ouvert absent', async () => {
     const { POST } = await loadRoute();
     respondWith = url => {
-      if (url.includes('/me')) return { email: 'compta@owl.test' };
+      if (url.includes('/me')) return { email: 'compta@exemple.test' };
       if (url.includes('/fiscal_years')) return { items: [{ id: 3, status: 'closed' }] };
       return { items: [] };
     };
