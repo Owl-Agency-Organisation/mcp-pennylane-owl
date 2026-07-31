@@ -1,7 +1,8 @@
-// MCP Server Pennylane - Owl Agency
-// v1.2.0 - 21 Tools - API v2 External
+// Serveur MCP Pennylane — 21 tools sur l'API v2 external.
+// Endpoint JSON-RPC unique, compatible avec tout client MCP parlant HTTP.
+// https://github.com/Owl-Agency-Organisation/mcp-pennylane-owl
 
-const SERVER_VERSION = '1.2.0';
+const SERVER_VERSION = '1.3.0';
 
 const TOKEN = process.env.PENNYLANE_API_TOKEN;
 const BASE_URL = process.env.PENNYLANE_API_BASE_URL || 'https://app.pennylane.com/api/external/v2';
@@ -98,7 +99,7 @@ const TOOLS = [
   // MONITORING (1)
   {
     name: 'pennylane_health_check',
-    description: 'Vérifier le statut global de la comptabilité Owl Agency via Pennylane. Retourne connexion API, exercices fiscaux, dernières transactions et alertes.',
+    description: 'Vérifier le statut global de la comptabilité connectée à Pennylane : validité de la connexion API, exercices fiscaux et dernières transactions. À appeler en premier pour diagnostiquer un problème de connexion.',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   
