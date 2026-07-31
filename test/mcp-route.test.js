@@ -530,6 +530,74 @@ describe('conformite au schema OpenAPI Pennylane', () => {
     });
   });
 
+  describe('exercice fiscal courant', () => {
+    // Pennylane cree les exercices a venir a l'avance : plusieurs peuvent
+    // etre ouverts en meme temps, et l'API les renvoie du plus recent au
+    // plus ancien. Configuration reelle observee chez Owl Agency.
+    const today = new Date().toISOString().slice(0, 10);
+    const year = Number(today.slice(0, 4));
+    const exercice = (offset, status) => ({
+      id: year + offset,
+      start: `${year + offset}-01-01`,
+      finish: `${year + offset}-12-31`,
+      status,
+    });
+    const PLUSIEURS_OUVERTS = {
+      items: [exercice(2, 'open'), exercice(1, 'open'), exercice(0, 'open')],
+    };
+
+    it('retient l exercice qui contient la date du jour, pas le premier ouvert', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url => (url.includes('/fiscal_years') ? PLUSIEURS_OUVERTS : { items: [] });
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.fiscalYears.total, 3);
+      assert.equal(payload.fiscalYears.current.id, year, 'doit designer l exercice en cours');
+    });
+
+    it('applique la meme logique dans get_user_context', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url => (url.includes('/fiscal_years') ? PLUSIEURS_OUVERTS : { items: [] });
+
+      const { payload } = await callTool(POST, 'pennylane_get_user_context');
+
+      assert.equal(payload.current_fiscal_year.id, year);
+    });
+
+    it('se rabat sur un exercice ouvert si aucun ne couvre aujourd hui', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url =>
+        url.includes('/fiscal_years') ? { items: [exercice(5, 'open')] } : { items: [] };
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.fiscalYears.current.id, year + 5);
+    });
+
+    it('traite reopen comme un exercice ouvert dans le repli', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url =>
+        url.includes('/fiscal_years') ? { items: [exercice(5, 'reopen')] } : { items: [] };
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.fiscalYears.current.id, year + 5);
+    });
+
+    it('ignore un exercice gele qui ne couvre pas aujourd hui', async () => {
+      const { POST } = await loadRoute();
+      respondWith = url =>
+        url.includes('/fiscal_years')
+          ? { items: [exercice(-2, 'frozen'), exercice(-1, 'closed')] }
+          : { items: [] };
+
+      const { payload } = await callTool(POST, 'pennylane_health_check');
+
+      assert.equal(payload.fiscalYears.current, null);
+    });
+  });
+
   describe('export FEC', () => {
     it('cible /exports/fecs au pluriel', async () => {
       const { POST } = await loadRoute();

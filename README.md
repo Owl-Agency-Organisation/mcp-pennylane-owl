@@ -172,6 +172,11 @@ La pagination est plafonnée à 100 éléments par appel (limite de l'API) : un
 | :--- | :--- | :--- |
 | `pennylane_health_check` | — | Statut global : connexion, exercices, dernières transactions |
 
+Plusieurs exercices fiscaux peuvent être ouverts simultanément — Pennylane crée
+les exercices à venir à l'avance. L'exercice signalé comme courant est celui
+dont la période contient la date du jour, et non le premier de la liste marqué
+`open`.
+
 ### Factures clients
 
 | Tool | Paramètres | Description |
@@ -296,7 +301,7 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-45 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+50 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 

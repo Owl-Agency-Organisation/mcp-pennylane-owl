@@ -62,6 +62,20 @@ function asArray(data, ...keys) {
   return [];
 }
 
+// Un exercice porte `start`, `finish` et un `status` parmi open, reopen,
+// closed, frozen. Plusieurs exercices peuvent etre ouverts simultanement :
+// Pennylane cree les exercices a venir a l'avance. Se contenter du premier
+// `open` de la liste designe donc un exercice futur comme etant le courant.
+// On cherche d'abord celui dont la periode contient la date du jour.
+// Les dates sont au format YYYY-MM-DD : la comparaison lexicographique
+// equivaut a la comparaison chronologique.
+function findCurrentFiscalYear(fiscalYears, today = new Date().toISOString().slice(0, 10)) {
+  const inRange = fiscalYears.find(f => f.start && f.finish && f.start <= today && today <= f.finish);
+  if (inRange) return inRange;
+  // Repli : aucun exercice ne couvre aujourd'hui (trou de parametrage).
+  return fiscalYears.find(f => f.status === 'open' || f.status === 'reopen') || null;
+}
+
 // L'API plafonne la pagination a 100 elements par page.
 function clampLimit(limit, fallback = 50) {
   const parsed = Number(limit);
@@ -370,7 +384,7 @@ async function executeTool(name, args = {}) {
           },
           fiscalYears: {
             total: fiscalYears.length,
-            current: fiscalYears.find(f => f.status === 'open') || null,
+            current: findCurrentFiscalYear(fiscalYears),
           },
           recentActivity: {
             lastTransactions: transactions.length,
@@ -611,7 +625,7 @@ async function executeTool(name, args = {}) {
           // renvoie 403.
           scopes: me.scopes ?? [],
           fiscal_years: fiscalYears,
-          current_fiscal_year: fiscalYears.find(f => f.status === 'open') || null,
+          current_fiscal_year: findCurrentFiscalYear(fiscalYears),
         };
       }
       
