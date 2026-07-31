@@ -2,10 +2,12 @@
   "name": "mcp-pennylane-owl",
   "version": "1.2.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "next": "^15.1.7",
