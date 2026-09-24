@@ -181,6 +181,10 @@ Cet outil concentre toute l'interprétation d'exercice. Les descriptions des
 outils de liste filtrables par date invitent à l'appeler d'abord pour
 raisonner par exercice.
 
+Toute dérivation vit dans `lib/derivations.js`, seul point où le serveur
+calcule une valeur au lieu de la relayer : date du jour à Paris, exercice
+courant, bornes d'exercice, solde d'une ligne de balance en centimes entiers.
+
 ## Transport et authentification
 
 Endpoint unique `/api/mcp`, JSON-RPC 2.0 sur HTTP : Streamable HTTP, réponses
@@ -214,22 +218,27 @@ heure.
 
 ## Outils de niveau 1
 
-Statuts : **existant** (présent en v1.4.0), **nouveau**, **renommé**,
-**conditionnel** (dépend d'un sondage sur données réelles).
+Statuts : **existant** (présent en v1.4.0), **nouveau**, **renommé**. Tous sont
+déclarés dans `lib/tools/level1-specs.js` et construits sur le registre
+(`lib/tools/level1.js`) : paramètres de chemin et de requête, corps
+d'écriture, tous validés avant l'appel. Les corps d'écriture de plus de
+2 000 caractères (devis) ne sont pas dépliés dans `tools/list` : ils passent
+par un paramètre `body`, validé contre le registre, dont le schéma complet
+s'obtient par `pennylane_describe_operation`.
 
 ### Contexte et diagnostic
 
 | Outil | Opération | Statut |
 | :--- | :--- | :--- |
 | `pennylane_health_check` | `GET /me`, `GET /fiscal_years`, `GET /transactions` | Existant |
-| `pennylane_get_user_context` | `GET /me` | Existant |
+| `pennylane_get_user_context` | `GET /me`, relayé tel quel | Existant |
 | `pennylane_resolve_fiscal_period` | `GET /fiscal_years` | Nouveau |
 
 ### Socle comptable
 
 | Outil | Opération | Statut |
 | :--- | :--- | :--- |
-| `pennylane_get_trial_balance` | `GET /trial_balance` | Nouveau |
+| `pennylane_get_trial_balance` | `GET /trial_balance`, solde par ligne dérivé | Nouveau |
 | `pennylane_list_ledger_entries` | `GET /ledger_entries` | Existant |
 | `pennylane_get_ledger_entry` | `GET /ledger_entries/{id}` | Nouveau |
 | `pennylane_list_ledger_entry_lines` | `GET /ledger_entry_lines` | Nouveau |
@@ -248,16 +257,20 @@ Vercel.
 | :--- | :--- | :--- |
 | `pennylane_export_fec` | `POST /exports/fecs` | Existant |
 | `pennylane_get_fec_export` | `GET /exports/fecs/{id}` | Existant |
-| `pennylane_export_general_ledger` | `POST /exports/general_ledgers` | Conditionnel |
-| `pennylane_get_general_ledger_export` | `GET /exports/general_ledgers/{id}` | Conditionnel |
+| `pennylane_export_general_ledger` | `POST /exports/general_ledgers` | Nouveau |
+| `pennylane_get_general_ledger_export` | `GET /exports/general_ledgers/{id}` | Nouveau |
+| `pennylane_export_analytical_general_ledger` | `POST /exports/analytical_general_ledgers` | Nouveau |
+| `pennylane_get_analytical_general_ledger_export` | `GET /exports/analytical_general_ledgers/{id}` | Nouveau |
 
 ### Historique des modifications
 
 | Outil | Opération | Statut |
 | :--- | :--- | :--- |
-| `pennylane_list_changelog_ledger_entry_lines` | `GET /changelogs/ledger_entry_lines` | Conditionnel |
-| `pennylane_list_changelog_transactions` | `GET /changelogs/transactions` | Conditionnel |
-| `pennylane_list_changelog_supplier_invoices` | `GET /changelogs/supplier_invoices` | Conditionnel |
+| `pennylane_list_changelog_ledger_entry_lines` | `GET /changelogs/ledger_entry_lines` | Nouveau |
+| `pennylane_list_changelog_transactions` | `GET /changelogs/transactions` | Nouveau |
+| `pennylane_list_changelog_supplier_invoices` | `GET /changelogs/supplier_invoices` | Nouveau |
+
+Ces outils ne renvoient que l'identifiant, l'opération et les horodatages. L'historique est conservé 4 semaines ; `start_date` (RFC 3339) ne se combine pas avec `cursor`, et n'est envoyé qu'à la première page.
 
 ### Banque
 
@@ -297,10 +310,14 @@ porte son statut e-facture (`e_invoicing`). Aucun outil dédié.
 
 | Outil | Opération | Statut |
 | :--- | :--- | :--- |
-| `pennylane_list_quotes` | `GET /quotes` | Existant |
+| `pennylane_list_quotes` | `GET /quotes` | Existant, sans filtre de date |
 | `pennylane_get_quote` | `GET /quotes/{id}` | Nouveau |
 | `pennylane_create_quote` | `POST /quotes` | Nouveau |
 | `pennylane_update_quote` | `PUT /quotes/{id}` | Nouveau |
+
+L'API n'accepte pas de filtre `date` sur les devis (champs admis : `id`,
+`customer_id`, `status`) : l'ancien outil, qui en envoyait un, échouait en
+400.
 
 ### Facturation électronique
 
@@ -333,6 +350,3 @@ porte son statut e-facture (`e_invoicing`). Aucun outil dédié.
   et les annexes de devis (`POST /quotes/{quote_id}/appendices`) reçoivent un
   fichier. La manière dont l'outil le reçoit reste à choisir, en tenant compte
   de la limite de taille du corps des requêtes des fonctions Vercel.
-- **Export du grand livre analytique.** Création autorisée par la liste
-  blanche (`POST /exports/analytical_general_ledgers`). Exposition au niveau 1
-  à décider après sondage.

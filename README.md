@@ -1,9 +1,11 @@
 # Serveur MCP Pennylane
 
 Expose la comptabilité [Pennylane](https://www.pennylane.com) à un assistant IA
-via le [Model Context Protocol](https://modelcontextprotocol.io). 22 tools en
-lecture seule : factures clients et fournisseurs, trésorerie, écritures, plan
-comptable, devis, export FEC.
+via le [Model Context Protocol](https://modelcontextprotocol.io) : 42 outils
+explicites (balance générale, écritures, factures, trésorerie, exports,
+historique des modifications…), construits sur le registre des opérations de
+la Company API v2. Les écritures se limitent à une liste blanche : devis,
+catégories analytiques, exports.
 
 Les endpoints appelés sont vérifiés contre le schéma OpenAPI officiel de la
 Company API v2.
@@ -15,7 +17,7 @@ Next.js et React.
 - [Prérequis](#prérequis)
 - [Déploiement](#déploiement)
 - [Connexion d'un client MCP](#connexion-dun-client-mcp)
-- [Les 22 tools](#les-22-tools)
+- [Les outils](#les-outils)
 - [Sécurité](#sécurité)
 - [Développement local](#développement-local)
 - [Dépannage](#dépannage)
@@ -176,23 +178,57 @@ Ces clients ne parlent pas HTTP directement. Passez par un pont :
 }
 ```
 
-## Les 22 tools
+## Les outils
 
-Tous les tools sont en **lecture seule**. `pennylane_export_fec` est le seul à
-émettre un `POST` vers l'API Pennylane, pour demander la génération d'un export
-téléchargeable — il ne modifie aucune donnée comptable.
+Les outils de niveau 1 sont des relais fins vers les opérations de l'API,
+construits sur le registre : leurs paramètres suivent les noms et les types de
+la spec, et sont validés avant tout appel. Un paramètre inconnu ou mal typé
+produit une erreur qui cite les paramètres attendus ; aucun appel ne part. La
+liste complète, avec les opérations appelées, est dans
+[docs/architecture.md](docs/architecture.md#outils-de-niveau-1).
+
+| Famille | Outils (préfixe `pennylane_`) |
+| :--- | :--- |
+| Contexte | `health_check`, `get_user_context`, `resolve_fiscal_period` |
+| Socle comptable | `get_trial_balance`, `list_ledger_entries`, `get_ledger_entry`, `list_ledger_entry_lines`, `list_ledger_accounts`, `list_journals`, `list_fiscal_years` |
+| Exports | `export_fec`, `get_fec_export`, `export_general_ledger`, `get_general_ledger_export`, `export_analytical_general_ledger`, `get_analytical_general_ledger_export` |
+| Historique des modifications | `list_changelog_ledger_entry_lines`, `list_changelog_transactions`, `list_changelog_supplier_invoices` |
+| Banque | `list_transactions`, `get_transaction`, `get_transaction_matched_invoices`, `list_bank_accounts` |
+| Achats | `list_supplier_invoices`, `get_supplier_invoice`, `get_supplier_invoice_matched_transactions`, `list_suppliers` |
+| Ventes | `list_customer_invoices`, `get_customer_invoice`, `get_customer_invoice_matched_transactions`, `list_customers` |
+| Devis | `list_quotes`, `get_quote`, `create_quote`, `update_quote` |
+| Facturation électronique | `get_pa_registrations` |
+| Analytique | `list_categories`, `create_category`, `update_category`, `list_category_groups`, `create_category_group`, `update_category_group` |
+
+**Écritures.** Seules les écritures de la liste blanche existent : devis et
+catégories (création, modification), création d'exports. Aucune écriture sur
+les transactions ni sur les écritures comptables.
+
+### Exercices fiscaux
+
+Un exercice ne coïncide pas forcément avec l'année civile, et plusieurs peuvent
+être ouverts à la fois : Pennylane crée les exercices à venir à l'avance.
+`pennylane_resolve_fiscal_period` (`fiscal_year` : `"current"` ou identifiant)
+renvoie les bornes à reprendre en `start_date` et `end_date` dans les outils de
+liste. L'exercice courant est celui qui contient la date du jour, à Paris.
+
+### Balance générale
+
+`pennylane_get_trial_balance` renvoie les débits, les crédits et le solde de
+chaque compte (`balance` = débits − crédits), calculé en centimes entiers à
+partir des montants de l'API, jamais en nombres flottants. Aucun total n'est
+calculé.
 
 ### Pagination
 
-Les 14 tools de liste (ceux qui acceptent `limit`) renvoient la même
-enveloppe :
+Les outils de liste renvoient la même enveloppe :
 
 ```json
 { "items": [], "count": 50, "has_more": true, "next_cursor": "…", "truncated": false }
 ```
 
-- `limit` : taille de page, de 1 à 100. Une valeur supérieure est ramenée à
-  100, une valeur invalide retombe sur 50.
+- `limit` : taille de page, bornée au maximum documenté par l'opération (100
+  en général), 50 par défaut.
 - `cursor` : la valeur `next_cursor` d'une réponse précédente, pour lire la
   page suivante. Les filtres doivent être renvoyés à l'identique : le curseur
   ne les mémorise pas.
@@ -204,100 +240,28 @@ enveloppe :
   de caractères. Au-delà, mieux vaut resserrer les filtres, lire la balance
   générale ou passer par l'export FEC.
 - `count` est le nombre d'éléments renvoyés, jamais un total de la ressource.
+- `response_format` : `markdown` par défaut, une ligne par élément, champs
+  vides omis ; `json` pour la réponse complète.
 
 Les appels vers Pennylane sont espacés d'au moins 250 ms : l'API autorise
 25 requêtes par fenêtre de 5 secondes et par token. Un `429` est repris après
 le délai indiqué par l'en-tête `retry-after`, deux fois au plus.
 
-> **Limite connue** : `pennylane_analyze_customer_invoices` et
-> `pennylane_analyze_supplier_invoices` calculent leurs totaux sur une seule
-> page de 100 factures au plus. Au-delà, ces totaux sont faux.
+### Exports : un flux en deux temps
 
-### Monitoring
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_health_check` | — | Statut global : connexion, exercices, dernières transactions |
-
-Plusieurs exercices fiscaux peuvent être ouverts simultanément — Pennylane crée
-les exercices à venir à l'avance. L'exercice signalé comme courant est celui
-dont la période contient la date du jour, et non le premier de la liste marqué
-`open`.
-
-### Factures clients
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_customer_invoices` | `start_date`, `end_date`, `limit` | Lister les factures clients |
-| `pennylane_analyze_customer_invoices` | `start_date`\*, `end_date`\* | CA, impayés, montant moyen sur la période |
-| `pennylane_get_customer_invoice` | `invoice_id`\* | Détail d'une facture |
-| `pennylane_get_customer_invoice_matched_transactions` | `invoice_id`\*, `limit` | Transactions bancaires rapprochées |
-
-### Factures fournisseurs
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_supplier_invoices` | `start_date`, `end_date`, `limit` | Lister les factures fournisseurs |
-| `pennylane_analyze_supplier_invoices` | `start_date`\*, `end_date`\* | Charges, impayés, montant moyen |
-| `pennylane_get_supplier_invoice` | `invoice_id`\* | Détail d'une facture |
-
-### Trésorerie
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_transactions` | `start_date`, `end_date`, `limit` | Transactions bancaires |
-| `pennylane_list_bank_accounts` | `limit` | Comptes bancaires, soldes, statuts de connexion |
-
-### Contacts
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_get_customers` | `limit` | Clients |
-| `pennylane_get_suppliers` | `limit` | Fournisseurs |
-
-### Comptabilité
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_categories` | `limit` | Catégories analytiques |
-| `pennylane_list_ledger_entries` | `start_date`, `end_date`, `limit` | Écritures comptables |
-| `pennylane_list_products` | `limit` | Catalogue produits et services |
-| `pennylane_list_journals` | `limit` | Journaux (ventes, achats, banque, OD) |
-| `pennylane_list_ledger_accounts` | `limit` | Plan comptable, classes 1 à 7 |
-
-### Commercial
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_quotes` | `start_date`, `end_date`, `limit` | Devis |
-
-### Contexte et exports
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_get_user_context` | — | Profil, entreprise, exercices fiscaux |
-| `pennylane_list_fiscal_years` | `limit` | Exercices fiscaux |
-| `pennylane_export_fec` | `start_date`\*, `end_date`\* | Lance un export FEC (contrôle fiscal français), renvoie un `export_id` |
-| `pennylane_get_fec_export` | `export_id`\* | État de l'export et URL de téléchargement une fois prêt |
-
-\* paramètre obligatoire. Les dates sont au format `YYYY-MM-DD`.
-
-### Export FEC : un flux en deux temps
-
-La génération d'un FEC est asynchrone côté Pennylane. `pennylane_export_fec`
-crée la demande et renvoie un `export_id` avec un statut `pending`. Il faut
-ensuite appeler `pennylane_get_fec_export` avec cet identifiant jusqu'à ce que
-le statut passe à `ready` : la réponse contient alors `file_url`, **valable
-30 minutes**. Cet export requiert le scope `exports:fec`.
+La génération d'un FEC, d'un grand livre ou d'un grand livre analytique est
+asynchrone côté Pennylane. L'outil `export_*` crée la demande et renvoie un
+`id` au statut `pending` ; l'outil `get_*_export` correspondant renvoie
+`file_url`, un lien temporaire, une fois le statut passé à `ready`. Ce fichier
+est destiné à un humain : pour analyser, la balance générale et les lignes
+d'écritures conviennent au modèle. Le FEC requiert le scope `exports:fec`.
 
 ### Scopes
 
 Le token Pennylane porte des scopes qui déterminent les endpoints accessibles.
-Un tool appelant une ressource hors scope échoue avec un message explicite du
-type `Access to this resource requires scope "exports:fec"`.
-`pennylane_get_user_context` et `pennylane_health_check` renvoient la liste des
-scopes du token : c'est le premier endroit à regarder devant un refus
-inexpliqué.
+Sur un refus `403`, le message d'erreur cite les scopes réels du token, lus sur
+`/me` : aucun scope manquant n'est deviné. `pennylane_get_user_context` et
+`pennylane_health_check` renvoient aussi cette liste.
 
 > **Note de compatibilité** : depuis le 1er juillet 2026, fin du déploiement
 > des [changements 2026 de l'API Pennylane](https://pennylane.readme.io/docs/2026-api-changes-guide),
@@ -359,7 +323,7 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-138 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+180 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 
@@ -433,16 +397,15 @@ ou expiré, et non le secret MCP.
 
 ### `Pennylane API error 404`
 
-L'endpoint appelé n'existe pas sur la version d'API configurée. Vérifiez
-`PENNYLANE_API_BASE_URL` — la valeur par défaut inclut le segment `/external`,
-souvent oublié.
+L'identifiant demandé n'existe pas, ou l'endpoint n'existe pas sur la version
+d'API configurée. Dans le second cas, vérifiez `PENNYLANE_API_BASE_URL` : la
+valeur par défaut inclut le segment `/external`, souvent oublié.
 
-### Un tool renvoie `count: 0` sans erreur
+### Un outil de liste renvoie `count: 0` sans erreur
 
-Le serveur normalise les réponses de l'API, qui arrivent tantôt en tableau brut,
-tantôt en objet paginé. Une forme inconnue produit une liste vide plutôt qu'une
-exception. Si vous attendiez des données, vérifiez d'abord les filtres de date,
-puis la réponse brute de l'API sur le même endpoint.
+Vérifiez d'abord les filtres de date : ils raisonnent en dates calendaires, et
+un exercice ne coïncide pas forcément avec l'année civile.
+`pennylane_resolve_fiscal_period` donne les bornes exactes d'un exercice.
 
 ### Le client ne voit aucun tool
 

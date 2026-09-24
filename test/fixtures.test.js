@@ -65,7 +65,7 @@ describe('fixtures d or : /me', () => {
     assert.deepEqual(payload.connection.scopes, ME.scopes);
   });
 
-  it('get_user_context lit l utilisateur imbrique et reg_no', async () => {
+  it('get_user_context relaie /me : utilisateur imbrique, reg_no, referentiel', async () => {
     const { payload } = await callTool('pennylane_get_user_context');
 
     assert.equal(payload.user.id, ME.user.id);
@@ -74,6 +74,7 @@ describe('fixtures d or : /me', () => {
     assert.equal(payload.company.reg_no, ME.company.reg_no);
     assert.ok(!('siret' in payload.company));
     assert.ok(!('vat_number' in payload.company));
+    assert.equal(payload.company.accounting_logic, ME.company.accounting_logic);
   });
 });
 
@@ -95,17 +96,19 @@ describe('fixtures d or : exercice courant, exercice long et gele', () => {
   atDate('2025-03-15');
 
   it('designe l exercice long qui contient la date, meme gele', async () => {
-    const { payload } = await callTool('pennylane_get_user_context');
+    const { payload } = await callTool('pennylane_resolve_fiscal_period', { fiscal_year: 'current' });
 
-    assert.equal(payload.current_fiscal_year.start, '2024-05-16');
-    assert.equal(payload.current_fiscal_year.finish, '2025-12-31');
-    assert.equal(payload.current_fiscal_year.status, 'frozen');
+    assert.equal(payload.fiscal_year.start, '2024-05-16');
+    assert.equal(payload.fiscal_year.finish, '2025-12-31');
+    assert.equal(payload.fiscal_year.status, 'frozen');
+    assert.equal(payload.contains_today, true);
+    assert.deepEqual(payload.filters, { start_date: '2024-05-16', end_date: '2025-12-31' });
   });
 });
 
 describe('fixtures d or : listes', () => {
   it('list_fiscal_years remonte l enveloppe et la pagination telles quelles', async () => {
-    const { payload } = await callTool('pennylane_list_fiscal_years');
+    const { payload } = await callTool('pennylane_list_fiscal_years', { response_format: 'json' });
     const raw = FIXTURES['/fiscal_years'];
 
     assert.equal(payload.count, raw.items.length);
@@ -115,7 +118,7 @@ describe('fixtures d or : listes', () => {
   });
 
   it('list_journals remonte les 11 journaux dans l ordre de l API', async () => {
-    const { payload } = await callTool('pennylane_list_journals');
+    const { payload } = await callTool('pennylane_list_journals', { response_format: 'json' });
 
     assert.deepEqual(payload.items.map(j => j.code), FIXTURES['/journals'].items.map(j => j.code));
   });

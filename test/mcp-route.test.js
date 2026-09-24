@@ -17,6 +17,8 @@ let calls = [];
 // erreur HTTP de l'API Pennylane.
 let respondWith = () => ({});
 const FAIL = Symbol('erreur API');
+// respondWith peut renvoyer { [HTTP_STATUS]: 403, text } pour simuler un refus.
+const HTTP_STATUS = Symbol('statut HTTP');
 
 const realFetch = globalThis.fetch;
 
@@ -27,9 +29,12 @@ before(() => {
       method: init?.method || 'GET',
       body: init?.body ? JSON.parse(init.body) : undefined,
     });
-    const body = respondWith(String(url));
+    const body = respondWith(String(url), init);
     if (body === FAIL) {
       return { ok: false, status: 500, text: async () => 'erreur simulee' };
+    }
+    if (body?.[HTTP_STATUS]) {
+      return { ok: false, status: body[HTTP_STATUS], text: async () => body.text };
     }
     return { ok: true, status: 200, json: async () => body };
   };
@@ -94,7 +99,14 @@ async function callTool(POST, name, args) {
     ),
   );
   const body = await response.json();
-  return { result: body.result, payload: JSON.parse(body.result.content[0].text) };
+  const text = body.result.content[0].text;
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = text;
+  }
+  return { result: body.result, payload, text };
 }
 
 const lastCallUrl = () => calls.at(-1).url;
@@ -311,13 +323,13 @@ describe('protocole MCP', () => {
 });
 
 describe('catalogue de tools', () => {
-  it('expose 22 tools aux noms uniques et prefixes', async () => {
+  it('expose 42 tools aux noms uniques et prefixes', async () => {
     const { POST } = await loadRoute();
     const response = await POST(jsonRpcRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, AUTH));
     const { result } = await response.json();
     const names = result.tools.map(tool => tool.name);
 
-    assert.equal(result.tools.length, 22);
+    assert.equal(result.tools.length, 42);
     assert.equal(new Set(names).size, names.length);
     assert.ok(names.every(name => name.startsWith('pennylane_')));
   });
@@ -360,34 +372,30 @@ describe('normalisation des reponses Pennylane', () => {
     assert.equal(payload.fiscalYears.current.id, 7);
   });
 
-  it('gere un objet pagine pour fiscal_years dans get_user_context', async () => {
+  it('gere un objet pagine pour fiscal_years dans resolve_fiscal_period', async () => {
     const { POST } = await loadRoute();
-    respondWith = url => {
-      if (url.includes('/me')) return { id: 1, email: 'compta@exemple.test', company: { name: 'Entreprise Test' } };
-      if (url.includes('/fiscal_years')) return { items: [{ id: 7, status: 'open' }] };
-      return {};
-    };
+    respondWith = url => (url.includes('/fiscal_years') ? { items: [{ id: 7, status: 'open' }] } : {});
 
-    const { payload } = await callTool(POST, 'pennylane_get_user_context');
+    const { payload } = await callTool(POST, 'pennylane_resolve_fiscal_period');
 
-    assert.equal(payload.fiscal_years.length, 1);
-    assert.equal(payload.current_fiscal_year.id, 7);
+    assert.equal(payload.fiscal_year.id, 7);
   });
 
   it('gere un tableau brut', async () => {
     const { POST } = await loadRoute();
     respondWith = () => [{ id: 1 }, { id: 2 }];
 
-    const { payload } = await callTool(POST, 'pennylane_list_journals');
+    const { payload } = await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.equal(payload.count, 2);
   });
 
-  it('gere une cle nommee plutot que items', async () => {
+  // Forme reelle de toutes les listes, verifiee sur les fixtures d or.
+  it('lit les elements sous items', async () => {
     const { POST } = await loadRoute();
-    respondWith = () => ({ journals: [{ id: 1 }] });
+    respondWith = () => ({ items: [{ id: 1 }], has_more: false, next_cursor: null });
 
-    const { payload } = await callTool(POST, 'pennylane_list_journals');
+    const { payload } = await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.equal(payload.count, 1);
   });
@@ -396,7 +404,7 @@ describe('normalisation des reponses Pennylane', () => {
     const { POST } = await loadRoute();
     respondWith = () => ({ forme: 'inattendue' });
 
-    const { result, payload } = await callTool(POST, 'pennylane_list_journals');
+    const { result, payload } = await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.equal(result.isError, false);
     assert.equal(payload.count, 0);
@@ -424,7 +432,7 @@ describe('pagination', () => {
 
   it('plafonne le limit a 100', async () => {
     const { POST } = await loadRoute();
-    await callTool(POST, 'pennylane_list_journals', { limit: 5000 });
+    await callTool(POST, 'pennylane_list_journals', { limit: 5000, response_format: 'json' });
 
     assert.match(lastCallUrl(), /limit=100(&|$)/);
   });
@@ -436,9 +444,18 @@ describe('pagination', () => {
     assert.match(lastCallUrl(), /limit=1(&|$)/);
   });
 
-  it('retombe sur 50 pour un limit non numerique', async () => {
+  it('refuse un limit non numerique, sans appeler l API', async () => {
     const { POST } = await loadRoute();
-    await callTool(POST, 'pennylane_list_journals', { limit: 'beaucoup' });
+    const { result, payload } = await callTool(POST, 'pennylane_list_journals', { limit: 'beaucoup' });
+
+    assert.equal(result.isError, true);
+    assert.match(payload.message, /limit : number attendu/);
+    assert.equal(calls.length, 0);
+  });
+
+  it('applique 50 par defaut', async () => {
+    const { POST } = await loadRoute();
+    await callTool(POST, 'pennylane_list_journals');
 
     assert.match(lastCallUrl(), /limit=50(&|$)/);
   });
@@ -452,23 +469,23 @@ describe('pagination', () => {
 });
 
 describe('pagination par curseur', () => {
-  // Les 14 outils de liste et les arguments minimaux pour les appeler.
-  const LIST_TOOLS = [
-    ['pennylane_list_customer_invoices', {}],
-    ['pennylane_get_customer_invoice_matched_transactions', { invoice_id: '42' }],
-    ['pennylane_list_supplier_invoices', {}],
-    ['pennylane_list_transactions', {}],
-    ['pennylane_list_bank_accounts', {}],
-    ['pennylane_get_customers', {}],
-    ['pennylane_get_suppliers', {}],
-    ['pennylane_list_categories', {}],
-    ['pennylane_list_ledger_entries', {}],
-    ['pennylane_list_products', {}],
-    ['pennylane_list_journals', {}],
-    ['pennylane_list_ledger_accounts', {}],
-    ['pennylane_list_quotes', {}],
-    ['pennylane_list_fiscal_years', {}],
-  ];
+  // Outils de liste : ceux qui acceptent response_format. Les arguments
+  // requis recoivent une valeur minimale selon leur schema.
+  async function listTools() {
+    const { POST } = await loadRoute();
+    const response = await POST(jsonRpcRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, AUTH));
+    const { result } = await response.json();
+    return result.tools
+      .filter(tool => tool.inputSchema.properties.response_format)
+      .map(tool => {
+        const args = { response_format: 'json' };
+        for (const name of tool.inputSchema.required ?? []) {
+          const schema = tool.inputSchema.properties[name];
+          args[name] = schema.format === 'date' ? '2026-01-01' : schema.type === 'integer' ? 42 : '42';
+        }
+        return { tool, args };
+      });
+  }
 
   // Deux pages chainees ; le curseur est lu dans l'URL appelee.
   const twoPages = url =>
@@ -476,37 +493,41 @@ describe('pagination par curseur', () => {
       ? { items: [{ id: 2 }], has_more: false, next_cursor: null }
       : { items: [{ id: 1 }], has_more: true, next_cursor: 'p2' };
 
-  it('declare cursor et fetch_all sur chaque outil de liste', async () => {
-    const { POST } = await loadRoute();
-    const response = await POST(jsonRpcRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, AUTH));
-    const { result } = await response.json();
-    const byName = new Map(result.tools.map(tool => [tool.name, tool]));
+  it('declare cursor et fetch_all sur chaque outil de liste pagine', async () => {
+    const tools = await listTools();
 
-    for (const [name] of LIST_TOOLS) {
-      const properties = byName.get(name)?.inputSchema.properties ?? {};
-      assert.equal(properties.cursor?.type, 'string', `${name}: cursor`);
-      assert.equal(properties.fetch_all?.type, 'boolean', `${name}: fetch_all`);
-      assert.equal(properties.limit?.type, 'number', `${name}: limit`);
+    assert.equal(tools.length, 22);
+    for (const { tool } of tools) {
+      const properties = tool.inputSchema.properties;
+      // Seule l'immatriculation PA n'est pas paginee par l'API.
+      if (tool.name === 'pennylane_get_pa_registrations') {
+        assert.equal(properties.cursor, undefined);
+        continue;
+      }
+      assert.equal(properties.cursor?.type, 'string', `${tool.name}: cursor`);
+      assert.equal(properties.fetch_all?.type, 'boolean', `${tool.name}: fetch_all`);
+      assert.equal(properties.limit?.type, 'number', `${tool.name}: limit`);
     }
   });
 
   it('renvoie l enveloppe commune sur chaque outil de liste', async () => {
-    for (const [name, args] of LIST_TOOLS) {
+    for (const { tool, args } of await listTools()) {
       const { POST } = await loadRoute();
-      respondWith = () => ({ items: [{ id: 1 }], has_more: true, next_cursor: 'suite' });
+      // Lignes de balance valides pour la derivation du solde.
+      respondWith = () => ({ items: [{ id: 1, debits: '1.0', credits: '0.0' }], has_more: true, next_cursor: 'suite' });
 
-      const { result, payload } = await callTool(POST, name, args);
+      const { result, payload } = await callTool(POST, tool.name, args);
 
-      assert.equal(result.isError, false, name);
+      assert.equal(result.isError, false, `${tool.name} : ${JSON.stringify(payload)}`);
       assert.deepEqual(
         Object.keys(payload).sort(),
         ['count', 'has_more', 'items', 'next_cursor', 'truncated'],
-        name,
+        tool.name,
       );
-      assert.equal(payload.count, 1, name);
-      assert.equal(payload.has_more, true, name);
-      assert.equal(payload.next_cursor, 'suite', name);
-      assert.equal(payload.truncated, false, name);
+      assert.equal(payload.count, 1, tool.name);
+      assert.equal(payload.has_more, true, tool.name);
+      assert.equal(payload.next_cursor, 'suite', tool.name);
+      assert.equal(payload.truncated, false, tool.name);
     }
   });
 
@@ -532,6 +553,7 @@ describe('pagination par curseur', () => {
     const { payload } = await callTool(POST, 'pennylane_list_supplier_invoices', {
       start_date: '2026-01-01',
       fetch_all: true,
+      response_format: 'json',
     });
 
     assert.equal(calls.length, 2);
@@ -547,7 +569,7 @@ describe('pagination par curseur', () => {
     const { POST } = await loadRoute();
     respondWith = twoPages;
 
-    const { payload } = await callTool(POST, 'pennylane_list_journals');
+    const { payload } = await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.equal(calls.length, 1);
     assert.equal(payload.has_more, true);
@@ -569,7 +591,7 @@ describe('remontee des erreurs', () => {
     const { POST } = await loadRoute();
     respondWith = () => FAIL;
 
-    const { result, payload } = await callTool(POST, 'pennylane_list_journals');
+    const { result, payload } = await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.equal(result.isError, true);
     assert.equal(payload.error, true);
@@ -580,7 +602,7 @@ describe('remontee des erreurs', () => {
     const { POST } = await loadRoute();
     respondWith = () => FAIL;
 
-    const { result, payload } = await callTool(POST, 'pennylane_list_journals');
+    const { result, payload } = await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.ok(!('__mcpError' in payload));
     assert.ok(!result.content[0].text.includes('__mcpError'));
@@ -598,7 +620,7 @@ describe('remontee des erreurs', () => {
     const { POST } = await loadRoute();
     respondWith = () => ({ items: [{ id: 1, label: 'a' }], has_more: false, next_cursor: null });
 
-    const { result, payload } = await callTool(POST, 'pennylane_list_journals');
+    const { result, payload } = await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.equal(result.content[0].text, JSON.stringify(payload));
   });
@@ -607,7 +629,7 @@ describe('remontee des erreurs', () => {
     const { POST } = await loadRoute();
     respondWith = () => ({ items: [{ id: 1 }] });
 
-    const { result } = await callTool(POST, 'pennylane_list_journals');
+    const { result } = await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.equal(result.isError, false);
   });
@@ -628,8 +650,8 @@ describe('GET', () => {
     const { GET } = await loadRoute();
     const body = await (await GET(new Request('https://exemple.test/api/mcp', { headers: AUTH }))).json();
 
-    assert.equal(body.tools_count, 22);
-    assert.equal(body.tools.length, 22);
+    assert.equal(body.tools_count, 42);
+    assert.equal(body.tools.length, 42);
     assert.equal(body.pennylane_token_configured, true);
   });
 
@@ -646,7 +668,7 @@ describe('appels sortants vers Pennylane', () => {
     const { POST } = await loadRoute();
     respondWith = () => ({ items: [] });
 
-    await callTool(POST, 'pennylane_list_journals');
+    await callTool(POST, 'pennylane_list_journals', { response_format: 'json' });
 
     assert.ok(lastCallUrl().startsWith('https://api.test/v2/'), lastCallUrl());
     assert.equal(calls.length, 1);
@@ -682,8 +704,8 @@ describe('appels sortants vers Pennylane', () => {
     respondWith = () => ({ id: 124, status: 'pending', created_at: '2026-01-01T00:00:00Z' });
 
     await callTool(POST, 'pennylane_export_fec', {
-      start_date: '2026-01-01',
-      end_date: '2026-12-31',
+      period_start: '2026-01-01',
+      period_end: '2026-12-31',
     });
 
     assert.equal(calls.at(-1).method, 'POST');
@@ -771,13 +793,14 @@ describe('conformite au schema OpenAPI Pennylane', () => {
       assert.equal(payload.fiscalYears.current.id, year, 'doit designer l exercice en cours');
     });
 
-    it('applique la meme logique dans get_user_context', async () => {
+    it('applique la meme logique dans resolve_fiscal_period', async () => {
       const { POST } = await loadRoute();
       respondWith = url => (url.includes('/fiscal_years') ? PLUSIEURS_OUVERTS : { items: [] });
 
-      const { payload } = await callTool(POST, 'pennylane_get_user_context');
+      const { payload } = await callTool(POST, 'pennylane_resolve_fiscal_period', { fiscal_year: 'current' });
 
-      assert.equal(payload.current_fiscal_year.id, year);
+      assert.equal(payload.fiscal_year.id, year);
+      assert.equal(payload.contains_today, true);
     });
 
     it('se rabat sur un exercice ouvert si aucun ne couvre aujourd hui', async () => {
@@ -814,56 +837,66 @@ describe('conformite au schema OpenAPI Pennylane', () => {
   });
 
   describe('export FEC', () => {
+    const PERIOD = { period_start: '2026-01-01', period_end: '2026-12-31' };
+
     it('cible /exports/fecs au pluriel', async () => {
       const { POST } = await loadRoute();
       respondWith = () => ({ id: 124, status: 'pending' });
 
-      await callTool(POST, 'pennylane_export_fec', { start_date: '2026-01-01', end_date: '2026-12-31' });
+      await callTool(POST, 'pennylane_export_fec', PERIOD);
 
       assert.ok(lastCallUrl().endsWith('/exports/fecs'), lastCallUrl());
     });
 
-    it('envoie period_start et period_end, pas start_date et end_date', async () => {
+    it('envoie period_start et period_end, les noms du schema', async () => {
       const { POST } = await loadRoute();
       respondWith = () => ({ id: 124, status: 'pending' });
 
-      await callTool(POST, 'pennylane_export_fec', { start_date: '2026-01-01', end_date: '2026-12-31' });
+      await callTool(POST, 'pennylane_export_fec', PERIOD);
 
-      assert.deepEqual(calls.at(-1).body, { period_start: '2026-01-01', period_end: '2026-12-31' });
+      assert.deepEqual(calls.at(-1).body, PERIOD);
     });
 
-    it('renvoie l identifiant d export, la generation etant asynchrone', async () => {
+    it('refuse start_date et end_date en citant les parametres attendus, sans appel', async () => {
       const { POST } = await loadRoute();
-      respondWith = () => ({ id: 124, status: 'pending', created_at: '2026-01-01T10:00:00Z' });
 
-      const { payload } = await callTool(POST, 'pennylane_export_fec', {
+      const { result, payload } = await callTool(POST, 'pennylane_export_fec', {
         start_date: '2026-01-01',
         end_date: '2026-12-31',
       });
 
-      assert.equal(payload.export_id, 124);
-      assert.equal(payload.status, 'pending');
-      assert.ok(!('download_url' in payload));
+      assert.equal(result.isError, true);
+      assert.match(payload.message, /parametre inconnu start_date ; attendus : period_start, period_end/);
+      assert.equal(calls.length, 0);
     });
 
-    it('recupere le fichier via get_fec_export une fois pret', async () => {
+    it('relaie l identifiant d export, la generation etant asynchrone', async () => {
       const { POST } = await loadRoute();
-      respondWith = () => ({ id: 124, status: 'ready', file_url: 'https://exemple.test/fec.txt' });
+      respondWith = () => ({ id: 124, status: 'pending', created_at: '2026-01-01T10:00:00Z' });
 
-      const { payload } = await callTool(POST, 'pennylane_get_fec_export', { export_id: '124' });
+      const { payload } = await callTool(POST, 'pennylane_export_fec', PERIOD);
+
+      assert.deepEqual(payload, { id: 124, status: 'pending', created_at: '2026-01-01T10:00:00Z' });
+    });
+
+    it('recupere le fichier via get_fec_export une fois pret, lien intact', async () => {
+      const { POST } = await loadRoute();
+      respondWith = () => ({ id: 124, status: 'ready', file_url: 'https://exemple.test/fec.txt?signature=abc' });
+
+      const { payload } = await callTool(POST, 'pennylane_get_fec_export', { id: 124 });
 
       assert.ok(lastCallUrl().endsWith('/exports/fecs/124'), lastCallUrl());
-      assert.equal(payload.ready, true);
-      assert.equal(payload.file_url, 'https://exemple.test/fec.txt');
+      assert.equal(payload.status, 'ready');
+      assert.equal(payload.file_url, 'https://exemple.test/fec.txt?signature=abc');
     });
 
     it('signale un export encore en cours sans URL de fichier', async () => {
       const { POST } = await loadRoute();
       respondWith = () => ({ id: 124, status: 'pending', file_url: null });
 
-      const { payload } = await callTool(POST, 'pennylane_get_fec_export', { export_id: '124' });
+      const { payload } = await callTool(POST, 'pennylane_get_fec_export', { id: 124 });
 
-      assert.equal(payload.ready, false);
+      assert.equal(payload.status, 'pending');
       assert.equal(payload.file_url, null);
     });
   });
