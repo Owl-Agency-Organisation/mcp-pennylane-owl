@@ -359,7 +359,7 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-129 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+138 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 
@@ -380,6 +380,17 @@ captures brutes ne sont jamais versionnées. `test/fixtures.test.js` rejoue les
 outils contre ces fixtures, à date figée.
  La CI
 GitHub Actions les exécute sur chaque pull request, avec le build.
+
+### Registre des opérations
+
+```bash
+npm run registry            # régénère lib/registry.json depuis openapi/accounting.json
+npm run registry:refresh    # télécharge la spec officielle, puis régénère
+```
+
+Le registre décrit les 174 opérations de la Company API v2. Il est vérifié
+avant chaque build : un registre désynchronisé de la spec, ou une opération
+utilisée par un outil qui disparaîtrait de la spec, fait échouer le build.
 
 ### Test smoke
 

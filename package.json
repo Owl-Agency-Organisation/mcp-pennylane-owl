@@ -20,10 +20,13 @@
   },
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/generate-registry.mjs --check",
     "build": "next build",
     "start": "next start",
     "test": "node --test \"test/**/*.test.js\"",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "registry": "node scripts/generate-registry.mjs",
+    "registry:refresh": "node scripts/generate-registry.mjs --refresh"
   },
   "dependencies": {
     "next": "^15.1.7",

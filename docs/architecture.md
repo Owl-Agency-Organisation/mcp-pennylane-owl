@@ -77,14 +77,21 @@ refuse.
 
 ## Registre des opérations
 
-`scripts/generate-registry.mjs` lit la spec OpenAPI et produit `registry.json` :
-pour chaque opération, `operation_id`, méthode, chemin, paramètres typés,
-schéma du corps, résumé et scopes documentés.
+`scripts/generate-registry.mjs` lit la spec OpenAPI et produit
+`lib/registry.json` : pour chaque opération, `operation_id`, méthode, chemin,
+paramètres typés, schéma du corps, schéma de réponse (trois niveaux), résumé et
+scopes documentés.
 
-- Le registre est généré au build et committé : il se relit en revue de PR, et
-  le serveur ne fait aucune lecture réseau au runtime pour le charger.
-- Le build échoue si une opération utilisée par un outil de niveau 1 disparaît
-  de la spec. Une rupture d'API casse le build au lieu de casser la production.
+- La spec est committée (`openapi/accounting.json`) : le build ne lit jamais
+  le réseau. `npm run registry:refresh` la télécharge et régénère le registre ;
+  la mise à jour passe par une PR relisible.
+- Le registre est committé, une opération par ligne : le diff d'une PR montre
+  exactement lesquelles changent. Le serveur ne fait aucune lecture réseau au
+  runtime pour le charger.
+- Avant chaque build (`prebuild`), `generate-registry.mjs --check` vérifie que
+  le registre correspond à la spec committée et que toutes les opérations du
+  niveau 1 (`lib/level1-operations.js`) y figurent. Sinon, le build échoue :
+  une rupture d'API casse le build au lieu de casser la production.
 
 ## Conventions
 
