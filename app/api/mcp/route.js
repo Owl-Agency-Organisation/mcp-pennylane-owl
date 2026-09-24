@@ -2,6 +2,14 @@
 // Endpoint JSON-RPC unique, compatible avec tout client MCP parlant HTTP.
 // https://github.com/Owl-Agency-Organisation/mcp-pennylane-owl
 
+import { createPennylaneClient } from '../../../lib/pennylane.js';
+import {
+  asArray,
+  paginate,
+  FETCH_ALL_MAX_PAGES,
+  FETCH_ALL_TIME_BUDGET_MS,
+} from '../../../lib/pagination.js';
+
 const SERVER_VERSION = '1.4.0';
 
 const TOKEN = process.env.PENNYLANE_API_TOKEN;
@@ -50,18 +58,6 @@ function isAuthorized(request) {
   return Boolean(custom) && safeEqual(custom, MCP_AUTH_TOKEN);
 }
 
-// L'API Pennylane renvoie tantot un tableau brut, tantot un objet pagine.
-// Cette normalisation evite les `.length` / `.find()` sur un objet.
-function asArray(data, ...keys) {
-  if (Array.isArray(data)) return data;
-  if (data && typeof data === 'object') {
-    for (const key of ['items', ...keys]) {
-      if (Array.isArray(data[key])) return data[key];
-    }
-  }
-  return [];
-}
-
 // Un exercice porte `start`, `finish` et un `status` parmi open, reopen,
 // closed, frozen. Plusieurs exercices peuvent etre ouverts simultanement :
 // Pennylane cree les exercices a venir a l'avance. Se contenter du premier
@@ -83,31 +79,60 @@ function clampLimit(limit, fallback = 50) {
   return Math.min(100, Math.max(1, Math.floor(parsed)));
 }
 
+function dateFilters(start_date, end_date) {
+  const filters = [];
+  if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
+  if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
+  return filters;
+}
+
 // ============================================
 // PENNYLANE API CLIENT
 // ============================================
 
-async function pennylane(endpoint, options = {}) {
-  console.log(`[Pennylane] ${options.method || 'GET'} ${endpoint}`);
-  const res = await fetch(`${BASE_URL}${endpoint}`, {
-    method: options.method || 'GET',
-    headers: {
-      'Authorization': `Bearer ${TOKEN}`,
-      'Content-Type': 'application/json',
-      ...options.headers,
+// Cadence les appels sous la limite de debit et reprend apres un 429.
+const pennylane = createPennylaneClient({ baseUrl: BASE_URL, token: TOKEN });
+
+// Outil de liste : une page, ou les suivantes avec fetch_all. Le curseur ne
+// memorise pas les filtres : ils sont renvoyes a chaque page.
+function listTool(endpoint, args, { filters = [], itemKeys = [] } = {}) {
+  const { limit = 50, cursor, fetch_all = false } = args;
+  const base = new URLSearchParams({ limit: String(clampLimit(limit)) });
+  if (filters.length > 0) base.set('filter', JSON.stringify(filters));
+
+  return paginate(
+    pageCursor => {
+      const query = new URLSearchParams(base);
+      if (pageCursor) query.set('cursor', pageCursor);
+      return pennylane(`${endpoint}?${query}`);
     },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Pennylane API error ${res.status}: ${errorText}`);
-  }
-  return res.json();
+    { cursor: typeof cursor === 'string' ? cursor : null, fetchAll: fetch_all === true, itemKeys },
+  );
 }
 
 // ============================================
 // MCP TOOLS DEFINITIONS (22 tools)
 // ============================================
+
+// Parametres communs a tous les outils de liste. La reponse est toujours
+// l'enveloppe { items, count, has_more, next_cursor, truncated }.
+const PAGINATION_PROPERTIES = {
+  limit: { type: 'number', description: 'Taille de page, de 1 à 100 (50 par défaut)', default: 50 },
+  cursor: {
+    type: 'string',
+    description: 'Valeur next_cursor d\'une réponse précédente, pour lire la page suivante. Renvoyer les mêmes filtres.',
+  },
+  fetch_all: {
+    type: 'boolean',
+    description: `Lire aussi les pages suivantes, dans la limite de ${FETCH_ALL_MAX_PAGES} pages et ${FETCH_ALL_TIME_BUDGET_MS / 1000} s. Si la liste reste incomplète : truncated = true, et next_cursor permet de reprendre.`,
+    default: false,
+  },
+};
+
+const DATE_FILTER_PROPERTIES = {
+  start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
+  end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
+};
 
 const TOOLS = [
   // MONITORING (1)
@@ -123,11 +148,7 @@ const TOOLS = [
     description: 'Lister les factures clients avec filtres par date. Essentiel pour le suivi du CA.',
     inputSchema: {
       type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...DATE_FILTER_PROPERTIES, ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -160,6 +181,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         invoice_id: { type: 'string', description: 'ID de la facture client' },
+        ...PAGINATION_PROPERTIES,
       },
       required: ['invoice_id'],
     },
@@ -171,11 +193,7 @@ const TOOLS = [
     description: 'Lister les factures fournisseurs avec filtres par date. Essentiel pour le suivi des charges.',
     inputSchema: {
       type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...DATE_FILTER_PROPERTIES, ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -208,11 +226,7 @@ const TOOLS = [
     description: 'Lister les transactions bancaires avec filtres optionnels. Utile pour le suivi de trésorerie.',
     inputSchema: {
       type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...DATE_FILTER_PROPERTIES, ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -220,9 +234,7 @@ const TOOLS = [
     description: 'Lister les comptes bancaires configurés dans Pennylane avec leurs soldes et statuts de connexion.',
     inputSchema: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...PAGINATION_PROPERTIES },
     },
   },
   
@@ -232,9 +244,7 @@ const TOOLS = [
     description: 'Lister tous les clients enregistrés dans Pennylane.',
     inputSchema: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -242,9 +252,7 @@ const TOOLS = [
     description: 'Lister tous les fournisseurs enregistrés dans Pennylane.',
     inputSchema: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...PAGINATION_PROPERTIES },
     },
   },
   
@@ -254,9 +262,7 @@ const TOOLS = [
     description: 'Lister les catégories comptables analytiques. Utile pour l\'organisation par projet/service.',
     inputSchema: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -264,11 +270,7 @@ const TOOLS = [
     description: 'Lister les écritures comptables pour une période. Utile pour audits et analyses détaillées.',
     inputSchema: {
       type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...DATE_FILTER_PROPERTIES, ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -276,9 +278,7 @@ const TOOLS = [
     description: 'Lister tous les produits/services du catalogue Pennylane.',
     inputSchema: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -286,9 +286,7 @@ const TOOLS = [
     description: 'Lister les journaux comptables (ventes, achats, banque, opérations diverses). Essentiel pour comprendre l\'organisation comptable.',
     inputSchema: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -296,9 +294,7 @@ const TOOLS = [
     description: 'Lister les comptes du plan comptable (classes 1 à 7). Permet de voir tous les comptes utilisés.',
     inputSchema: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...PAGINATION_PROPERTIES },
     },
   },
   
@@ -308,11 +304,7 @@ const TOOLS = [
     description: 'Lister les devis avec filtres optionnels par date.',
     inputSchema: {
       type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...DATE_FILTER_PROPERTIES, ...PAGINATION_PROPERTIES },
     },
   },
   
@@ -327,9 +319,7 @@ const TOOLS = [
     description: 'Lister tous les exercices fiscaux de l\'entreprise (ouverts, fermés, dates début/fin).',
     inputSchema: {
       type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
+      properties: { ...PAGINATION_PROPERTIES },
     },
   },
   {
@@ -394,17 +384,10 @@ async function executeTool(name, args = {}) {
       }
       
       case 'pennylane_list_customer_invoices': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/customer_invoices?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const invoices = asArray(data, 'invoices');
-        return { filters: { start_date, end_date }, count: invoices.length, invoices };
+        return await listTool('/customer_invoices', args, {
+          filters: dateFilters(args.start_date, args.end_date),
+          itemKeys: ['invoices'],
+        });
       }
       
       case 'pennylane_analyze_customer_invoices': {
@@ -446,28 +429,16 @@ async function executeTool(name, args = {}) {
       }
       
       case 'pennylane_get_customer_invoice_matched_transactions': {
-        const { invoice_id } = args;
-        const data = await pennylane(`/customer_invoices/${invoice_id}/matched_transactions`);
-        const transactions = asArray(data, 'matched_transactions');
-        return {
-          invoice_id,
-          matched_transactions_count: transactions.length,
-          matched_transactions: transactions,
-        };
+        return await listTool(`/customer_invoices/${args.invoice_id}/matched_transactions`, args, {
+          itemKeys: ['matched_transactions'],
+        });
       }
       
       case 'pennylane_list_supplier_invoices': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/supplier_invoices?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const invoices = asArray(data, 'invoices');
-        return { filters: { start_date, end_date }, count: invoices.length, invoices };
+        return await listTool('/supplier_invoices', args, {
+          filters: dateFilters(args.start_date, args.end_date),
+          itemKeys: ['invoices'],
+        });
       }
       
       case 'pennylane_analyze_supplier_invoices': {
@@ -509,94 +480,52 @@ async function executeTool(name, args = {}) {
       }
       
       case 'pennylane_list_transactions': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/transactions?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const transactions = asArray(data, 'transactions');
-        return { filters: { start_date, end_date }, count: transactions.length, transactions };
+        return await listTool('/transactions', args, {
+          filters: dateFilters(args.start_date, args.end_date),
+          itemKeys: ['transactions'],
+        });
       }
       
       case 'pennylane_list_bank_accounts': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/bank_accounts?limit=${clampLimit(limit)}`);
-        const accounts = asArray(data, 'bank_accounts');
-        return { count: accounts.length, bank_accounts: accounts };
+        return await listTool('/bank_accounts', args, { itemKeys: ['bank_accounts'] });
       }
       
       case 'pennylane_get_customers': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/customers?limit=${clampLimit(limit)}`);
-        const customers = asArray(data, 'customers');
-        return { count: customers.length, customers };
+        return await listTool('/customers', args, { itemKeys: ['customers'] });
       }
       
       case 'pennylane_get_suppliers': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/suppliers?limit=${clampLimit(limit)}`);
-        const suppliers = asArray(data, 'suppliers');
-        return { count: suppliers.length, suppliers };
+        return await listTool('/suppliers', args, { itemKeys: ['suppliers'] });
       }
       
       case 'pennylane_list_categories': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/categories?limit=${clampLimit(limit)}`);
-        const categories = asArray(data, 'categories');
-        return { count: categories.length, categories };
+        return await listTool('/categories', args, { itemKeys: ['categories'] });
       }
       
       case 'pennylane_list_ledger_entries': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/ledger_entries?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const entries = asArray(data, 'ledger_entries');
-        return { filters: { start_date, end_date }, count: entries.length, entries };
+        return await listTool('/ledger_entries', args, {
+          filters: dateFilters(args.start_date, args.end_date),
+          itemKeys: ['ledger_entries'],
+        });
       }
       
       case 'pennylane_list_products': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/products?limit=${clampLimit(limit)}`);
-        const products = asArray(data, 'products');
-        return { count: products.length, products };
+        return await listTool('/products', args, { itemKeys: ['products'] });
       }
       
       case 'pennylane_list_journals': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/journals?limit=${clampLimit(limit)}`);
-        const journals = asArray(data, 'journals');
-        return { count: journals.length, journals };
+        return await listTool('/journals', args, { itemKeys: ['journals'] });
       }
       
       case 'pennylane_list_ledger_accounts': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/ledger_accounts?limit=${clampLimit(limit)}`);
-        const accounts = asArray(data, 'ledger_accounts');
-        return { count: accounts.length, ledger_accounts: accounts };
+        return await listTool('/ledger_accounts', args, { itemKeys: ['ledger_accounts'] });
       }
       
       case 'pennylane_list_quotes': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/quotes?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const quotes = asArray(data, 'quotes');
-        return { filters: { start_date, end_date }, count: quotes.length, quotes };
+        return await listTool('/quotes', args, {
+          filters: dateFilters(args.start_date, args.end_date),
+          itemKeys: ['quotes'],
+        });
       }
       
       case 'pennylane_get_user_context': {
@@ -630,10 +559,7 @@ async function executeTool(name, args = {}) {
       }
       
       case 'pennylane_list_fiscal_years': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/fiscal_years?limit=${clampLimit(limit)}`);
-        const fiscalYears = asArray(data, 'fiscal_years');
-        return { count: fiscalYears.length, fiscal_years: fiscalYears };
+        return await listTool('/fiscal_years', args, { itemKeys: ['fiscal_years'] });
       }
       
       case 'pennylane_export_fec': {

@@ -358,6 +358,119 @@ describe('pagination', () => {
   });
 });
 
+describe('pagination par curseur', () => {
+  // Les 14 outils de liste et les arguments minimaux pour les appeler.
+  const LIST_TOOLS = [
+    ['pennylane_list_customer_invoices', {}],
+    ['pennylane_get_customer_invoice_matched_transactions', { invoice_id: '42' }],
+    ['pennylane_list_supplier_invoices', {}],
+    ['pennylane_list_transactions', {}],
+    ['pennylane_list_bank_accounts', {}],
+    ['pennylane_get_customers', {}],
+    ['pennylane_get_suppliers', {}],
+    ['pennylane_list_categories', {}],
+    ['pennylane_list_ledger_entries', {}],
+    ['pennylane_list_products', {}],
+    ['pennylane_list_journals', {}],
+    ['pennylane_list_ledger_accounts', {}],
+    ['pennylane_list_quotes', {}],
+    ['pennylane_list_fiscal_years', {}],
+  ];
+
+  // Deux pages chainees ; le curseur est lu dans l'URL appelee.
+  const twoPages = url =>
+    new URL(url).searchParams.get('cursor') === 'p2'
+      ? { items: [{ id: 2 }], has_more: false, next_cursor: null }
+      : { items: [{ id: 1 }], has_more: true, next_cursor: 'p2' };
+
+  it('declare cursor et fetch_all sur chaque outil de liste', async () => {
+    const { POST } = await loadRoute();
+    const response = await POST(jsonRpcRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, AUTH));
+    const { result } = await response.json();
+    const byName = new Map(result.tools.map(tool => [tool.name, tool]));
+
+    for (const [name] of LIST_TOOLS) {
+      const properties = byName.get(name)?.inputSchema.properties ?? {};
+      assert.equal(properties.cursor?.type, 'string', `${name}: cursor`);
+      assert.equal(properties.fetch_all?.type, 'boolean', `${name}: fetch_all`);
+      assert.equal(properties.limit?.type, 'number', `${name}: limit`);
+    }
+  });
+
+  it('renvoie l enveloppe commune sur chaque outil de liste', async () => {
+    for (const [name, args] of LIST_TOOLS) {
+      const { POST } = await loadRoute();
+      respondWith = () => ({ items: [{ id: 1 }], has_more: true, next_cursor: 'suite' });
+
+      const { result, payload } = await callTool(POST, name, args);
+
+      assert.equal(result.isError, false, name);
+      assert.deepEqual(
+        Object.keys(payload).sort(),
+        ['count', 'has_more', 'items', 'next_cursor', 'truncated'],
+        name,
+      );
+      assert.equal(payload.count, 1, name);
+      assert.equal(payload.has_more, true, name);
+      assert.equal(payload.next_cursor, 'suite', name);
+      assert.equal(payload.truncated, false, name);
+    }
+  });
+
+  it('transmet le curseur et renvoie les filtres avec lui', async () => {
+    const { POST } = await loadRoute();
+    respondWith = () => ({ items: [] });
+
+    await callTool(POST, 'pennylane_list_customer_invoices', {
+      start_date: '2026-01-01',
+      end_date: '2026-01-31',
+      cursor: 'eyJpZCI6MTAwfQ==',
+    });
+
+    const params = new URL(lastCallUrl()).searchParams;
+    assert.equal(params.get('cursor'), 'eyJpZCI6MTAwfQ==');
+    assert.equal(JSON.parse(params.get('filter')).length, 2);
+  });
+
+  it('suit les pages avec fetch_all en renvoyant les filtres a chaque page', async () => {
+    const { POST } = await loadRoute();
+    respondWith = twoPages;
+
+    const { payload } = await callTool(POST, 'pennylane_list_supplier_invoices', {
+      start_date: '2026-01-01',
+      fetch_all: true,
+    });
+
+    assert.equal(calls.length, 2);
+    assert.deepEqual(payload.items, [{ id: 1 }, { id: 2 }]);
+    assert.equal(payload.has_more, false);
+    assert.equal(payload.truncated, false);
+    for (const call of calls) {
+      assert.ok(new URL(call.url).searchParams.get('filter'), `filtre absent : ${call.url}`);
+    }
+  });
+
+  it('ne lit qu une page sans fetch_all', async () => {
+    const { POST } = await loadRoute();
+    respondWith = twoPages;
+
+    const { payload } = await callTool(POST, 'pennylane_list_journals');
+
+    assert.equal(calls.length, 1);
+    assert.equal(payload.has_more, true);
+    assert.equal(payload.next_cursor, 'p2');
+  });
+
+  it('marque isError quand une page suivante echoue', async () => {
+    const { POST } = await loadRoute();
+    respondWith = url => (new URL(url).searchParams.get('cursor') === 'p2' ? FAIL : twoPages(url));
+
+    const { result } = await callTool(POST, 'pennylane_list_journals', { fetch_all: true });
+
+    assert.equal(result.isError, true);
+  });
+});
+
 describe('remontee des erreurs', () => {
   it('marque isError sur une erreur de l API Pennylane', async () => {
     const { POST } = await loadRoute();

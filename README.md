@@ -158,13 +158,32 @@ Tous les tools sont en **lecture seule**. `pennylane_export_fec` est le seul à
 émettre un `POST` vers l'API Pennylane, pour demander la génération d'un export
 téléchargeable — il ne modifie aucune donnée comptable.
 
-La pagination est plafonnée à 100 éléments par appel (limite de l'API) : un
-`limit` supérieur est ramené à 100, une valeur invalide retombe sur 50.
+### Pagination
 
-> **Limite connue** : les tools de liste ne renvoient que la **première page**.
-> L'API Pennylane pagine par curseur (`cursor` / `next_cursor`), que le serveur
-> n'exploite pas encore. Au-delà de 100 éléments, les résultats sont donc
-> tronqués sans avertissement.
+Les 14 tools de liste (ceux qui acceptent `limit`) renvoient la même
+enveloppe :
+
+```json
+{ "items": [], "count": 50, "has_more": true, "next_cursor": "…", "truncated": false }
+```
+
+- `limit` : taille de page, de 1 à 100. Une valeur supérieure est ramenée à
+  100, une valeur invalide retombe sur 50.
+- `cursor` : la valeur `next_cursor` d'une réponse précédente, pour lire la
+  page suivante. Les filtres doivent être renvoyés à l'identique : le curseur
+  ne les mémorise pas.
+- `fetch_all` : lit aussi les pages suivantes, dans la limite de 10 pages et de
+  25 secondes. Si la liste reste incomplète, `truncated` vaut `true`, un
+  `message` l'explique, et `next_cursor` permet de reprendre.
+- `count` est le nombre d'éléments renvoyés, jamais un total de la ressource.
+
+Les appels vers Pennylane sont espacés d'au moins 250 ms : l'API autorise
+25 requêtes par fenêtre de 5 secondes et par token. Un `429` est repris après
+le délai indiqué par l'en-tête `retry-after`, deux fois au plus.
+
+> **Limite connue** : `pennylane_analyze_customer_invoices` et
+> `pennylane_analyze_supplier_invoices` calculent leurs totaux sur une seule
+> page de 100 factures au plus. Au-delà, ces totaux sont faux.
 
 ### Monitoring
 
@@ -184,7 +203,7 @@ dont la période contient la date du jour, et non le premier de la liste marqué
 | `pennylane_list_customer_invoices` | `start_date`, `end_date`, `limit` | Lister les factures clients |
 | `pennylane_analyze_customer_invoices` | `start_date`\*, `end_date`\* | CA, impayés, montant moyen sur la période |
 | `pennylane_get_customer_invoice` | `invoice_id`\* | Détail d'une facture |
-| `pennylane_get_customer_invoice_matched_transactions` | `invoice_id`\* | Transactions bancaires rapprochées |
+| `pennylane_get_customer_invoice_matched_transactions` | `invoice_id`\*, `limit` | Transactions bancaires rapprochées |
 
 ### Factures fournisseurs
 
@@ -301,14 +320,14 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-50 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+76 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 
 Couverture : authentification (dont le *fail-closed*), négociation du protocole,
 catalogue de tools et cohérence des schémas, normalisation des réponses de
-l'API, bornes de pagination, remontée des erreurs, format des requêtes
-sortantes.
+l'API, pagination par curseur et `fetch_all`, cadence des appels et reprise
+après un `429`, remontée des erreurs, format des requêtes sortantes.
 
 Les tests vivent dans `test/` et suivent la convention `*.test.js`. La CI
 GitHub Actions les exécute sur chaque pull request, avec le build.
