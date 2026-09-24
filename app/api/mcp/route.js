@@ -8,6 +8,7 @@ import {
   paginate,
   FETCH_ALL_MAX_PAGES,
   FETCH_ALL_TIME_BUDGET_MS,
+  FETCH_ALL_MAX_CHARS,
 } from '../../../lib/pagination.js';
 
 const SERVER_VERSION = '1.4.0';
@@ -124,7 +125,7 @@ const PAGINATION_PROPERTIES = {
   },
   fetch_all: {
     type: 'boolean',
-    description: `Lire aussi les pages suivantes, dans la limite de ${FETCH_ALL_MAX_PAGES} pages et ${FETCH_ALL_TIME_BUDGET_MS / 1000} s. Si la liste reste incomplète : truncated = true, et next_cursor permet de reprendre.`,
+    description: `Lire aussi les pages suivantes, dans la limite de ${FETCH_ALL_MAX_PAGES} pages, ${FETCH_ALL_TIME_BUDGET_MS / 1000} s et ${FETCH_ALL_MAX_CHARS.toLocaleString('fr-FR')} caractères. Si la liste reste incomplète : truncated = true, et next_cursor permet de reprendre.`,
     default: false,
   },
 };
@@ -691,7 +692,9 @@ export async function POST(request) {
         jsonrpc: '2.0',
         id,
         result: {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          // JSON compact : l'indentation alourdissait les reponses de ~40 %
+          // sans rien apporter au modele.
+          content: [{ type: 'text', text: JSON.stringify(result) }],
           isError,
         },
       });
