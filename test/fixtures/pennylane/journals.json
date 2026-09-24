@@ -1,0 +1,72 @@
+{
+  "items": [
+    {
+      "code": "BQ2",
+      "id": 400011,
+      "label": "Journal de trésorerie - Provisions Fiscales",
+      "type": "finances"
+    },
+    {
+      "code": "BQ1",
+      "id": 400010,
+      "label": "Journal de trésorerie - Compte principal",
+      "type": "finances"
+    },
+    {
+      "code": "EMP",
+      "id": 400009,
+      "label": "Emprunts",
+      "type": "loans"
+    },
+    {
+      "code": "PA",
+      "id": 400008,
+      "label": "Journal de Paie",
+      "type": "payroll"
+    },
+    {
+      "code": "SIT",
+      "id": 400007,
+      "label": "Journal de situation",
+      "type": "situation"
+    },
+    {
+      "code": "AN",
+      "id": 400006,
+      "label": "Journal des à-nouveaux",
+      "type": "carryover"
+    },
+    {
+      "code": "RT",
+      "id": 400005,
+      "label": "Journal des récupération de TVA",
+      "type": "pending_vat"
+    },
+    {
+      "code": "TVA",
+      "id": 400004,
+      "label": "Journal de TVA",
+      "type": "vat"
+    },
+    {
+      "code": "OD",
+      "id": 400003,
+      "label": "Journal des opérations diverses",
+      "type": "misc"
+    },
+    {
+      "code": "HA",
+      "id": 400002,
+      "label": "Journal d'achat",
+      "type": "purchases"
+    },
+    {
+      "code": "VT",
+      "id": 400001,
+      "label": "Journal de vente",
+      "type": "sales"
+    }
+  ],
+  "has_more": false,
+  "next_cursor": null
+}

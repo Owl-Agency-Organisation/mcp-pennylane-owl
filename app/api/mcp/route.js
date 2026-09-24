@@ -1,6 +1,11 @@
-// Serveur MCP Pennylane — 22 tools sur l'API v2 external.
+// Serveur MCP Pennylane sur la Company API v2. Les outils vivent dans
+// lib/tools/ ; ce fichier porte le protocole et l'authentification.
 // Endpoint JSON-RPC unique, compatible avec tout client MCP parlant HTTP.
 // https://github.com/Owl-Agency-Organisation/mcp-pennylane-owl
+
+import { createPennylaneClient } from '../../../lib/pennylane.js';
+import { oauthFromEnv } from '../../../lib/oauth/env.js';
+import { createToolbox } from '../../../lib/tools/index.js';
 
 const SERVER_VERSION = '1.4.0';
 
@@ -13,8 +18,16 @@ if (!TOKEN) {
 }
 
 if (!MCP_AUTH_TOKEN) {
-  console.error('[MCP] MCP_AUTH_TOKEN manquant : le serveur refusera toutes les requetes.');
+  console.error('[MCP] MCP_AUTH_TOKEN manquant : le secret partage est refuse.');
 }
+
+// Serveur d'autorisation OAuth, ou null s'il n'est pas configure : seul le
+// secret partage est alors accepte.
+const oauth = oauthFromEnv();
+
+// Cadence les appels sous la limite de debit et reprend apres un 429.
+const pennylane = createPennylaneClient({ baseUrl: BASE_URL, token: TOKEN });
+const toolbox = createToolbox({ pennylane });
 
 // Revisions du protocole MCP que ce serveur sait servir, de la plus recente
 // a la plus ancienne. On renvoie celle demandee par le client si on la
@@ -38,648 +51,22 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-// Le token peut arriver via `Authorization: Bearer ...` (standard MCP) ou
-// via `X-MCP-Token` pour les clients qui ne laissent pas personnaliser
-// l'en-tete Authorization.
-function isAuthorized(request) {
-  if (!MCP_AUTH_TOKEN) return false;
+// Deux credentials acceptes :
+// - le secret partage, via `Authorization: Bearer ...` (standard MCP) ou via
+//   `X-MCP-Token` pour les clients qui ne laissent pas personnaliser
+//   l'en-tete Authorization ;
+// - un jeton d'acces OAuth emis par notre serveur d'autorisation pour cette
+//   ressource.
+async function isAuthorized(request) {
   const authHeader = request.headers.get('authorization') || '';
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-  if (bearer && safeEqual(bearer, MCP_AUTH_TOKEN)) return true;
-  const custom = (request.headers.get('x-mcp-token') || '').trim();
-  return Boolean(custom) && safeEqual(custom, MCP_AUTH_TOKEN);
-}
-
-// L'API Pennylane renvoie tantot un tableau brut, tantot un objet pagine.
-// Cette normalisation evite les `.length` / `.find()` sur un objet.
-function asArray(data, ...keys) {
-  if (Array.isArray(data)) return data;
-  if (data && typeof data === 'object') {
-    for (const key of ['items', ...keys]) {
-      if (Array.isArray(data[key])) return data[key];
-    }
+  if (MCP_AUTH_TOKEN) {
+    if (bearer && safeEqual(bearer, MCP_AUTH_TOKEN)) return true;
+    const custom = (request.headers.get('x-mcp-token') || '').trim();
+    if (custom && safeEqual(custom, MCP_AUTH_TOKEN)) return true;
   }
-  return [];
-}
-
-// Un exercice porte `start`, `finish` et un `status` parmi open, reopen,
-// closed, frozen. Plusieurs exercices peuvent etre ouverts simultanement :
-// Pennylane cree les exercices a venir a l'avance. Se contenter du premier
-// `open` de la liste designe donc un exercice futur comme etant le courant.
-// On cherche d'abord celui dont la periode contient la date du jour.
-// Les dates sont au format YYYY-MM-DD : la comparaison lexicographique
-// equivaut a la comparaison chronologique.
-function findCurrentFiscalYear(fiscalYears, today = new Date().toISOString().slice(0, 10)) {
-  const inRange = fiscalYears.find(f => f.start && f.finish && f.start <= today && today <= f.finish);
-  if (inRange) return inRange;
-  // Repli : aucun exercice ne couvre aujourd'hui (trou de parametrage).
-  return fiscalYears.find(f => f.status === 'open' || f.status === 'reopen') || null;
-}
-
-// L'API plafonne la pagination a 100 elements par page.
-function clampLimit(limit, fallback = 50) {
-  const parsed = Number(limit);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(100, Math.max(1, Math.floor(parsed)));
-}
-
-// ============================================
-// PENNYLANE API CLIENT
-// ============================================
-
-async function pennylane(endpoint, options = {}) {
-  console.log(`[Pennylane] ${options.method || 'GET'} ${endpoint}`);
-  const res = await fetch(`${BASE_URL}${endpoint}`, {
-    method: options.method || 'GET',
-    headers: {
-      'Authorization': `Bearer ${TOKEN}`,
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Pennylane API error ${res.status}: ${errorText}`);
-  }
-  return res.json();
-}
-
-// ============================================
-// MCP TOOLS DEFINITIONS (22 tools)
-// ============================================
-
-const TOOLS = [
-  // MONITORING (1)
-  {
-    name: 'pennylane_health_check',
-    description: 'Vérifier le statut global de la comptabilité connectée à Pennylane : validité de la connexion API, exercices fiscaux et dernières transactions. À appeler en premier pour diagnostiquer un problème de connexion.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
-  },
-  
-  // FACTURES CLIENTS (4)
-  {
-    name: 'pennylane_list_customer_invoices',
-    description: 'Lister les factures clients avec filtres par date. Essentiel pour le suivi du CA.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_analyze_customer_invoices',
-    description: 'Analyser les factures clients : CA total, nombre de factures, impayés.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-      },
-      required: ['start_date', 'end_date'],
-    },
-  },
-  {
-    name: 'pennylane_get_customer_invoice',
-    description: 'Obtenir le détail complet d\'une facture client par son ID.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        invoice_id: { type: 'string', description: 'ID de la facture client' },
-      },
-      required: ['invoice_id'],
-    },
-  },
-  {
-    name: 'pennylane_get_customer_invoice_matched_transactions',
-    description: 'Obtenir les transactions bancaires rapprochées à une facture client. Permet de vérifier qu\'une facture a bien été payée et encaissée.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        invoice_id: { type: 'string', description: 'ID de la facture client' },
-      },
-      required: ['invoice_id'],
-    },
-  },
-  
-  // FACTURES FOURNISSEURS (3)
-  {
-    name: 'pennylane_list_supplier_invoices',
-    description: 'Lister les factures fournisseurs avec filtres par date. Essentiel pour le suivi des charges.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_analyze_supplier_invoices',
-    description: 'Analyser les factures fournisseurs : charges totales, nombre de factures, impayés.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-      },
-      required: ['start_date', 'end_date'],
-    },
-  },
-  {
-    name: 'pennylane_get_supplier_invoice',
-    description: 'Obtenir le détail complet d\'une facture fournisseur par son ID.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        invoice_id: { type: 'string', description: 'ID de la facture fournisseur' },
-      },
-      required: ['invoice_id'],
-    },
-  },
-  
-  // TRÉSORERIE (2)
-  {
-    name: 'pennylane_list_transactions',
-    description: 'Lister les transactions bancaires avec filtres optionnels. Utile pour le suivi de trésorerie.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_list_bank_accounts',
-    description: 'Lister les comptes bancaires configurés dans Pennylane avec leurs soldes et statuts de connexion.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  
-  // CONTACTS (2)
-  {
-    name: 'pennylane_get_customers',
-    description: 'Lister tous les clients enregistrés dans Pennylane.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_get_suppliers',
-    description: 'Lister tous les fournisseurs enregistrés dans Pennylane.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  
-  // COMPTABILITÉ (5)
-  {
-    name: 'pennylane_list_categories',
-    description: 'Lister les catégories comptables analytiques. Utile pour l\'organisation par projet/service.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_list_ledger_entries',
-    description: 'Lister les écritures comptables pour une période. Utile pour audits et analyses détaillées.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_list_products',
-    description: 'Lister tous les produits/services du catalogue Pennylane.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_list_journals',
-    description: 'Lister les journaux comptables (ventes, achats, banque, opérations diverses). Essentiel pour comprendre l\'organisation comptable.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_list_ledger_accounts',
-    description: 'Lister les comptes du plan comptable (classes 1 à 7). Permet de voir tous les comptes utilisés.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  
-  // COMMERCIAL (1)
-  {
-    name: 'pennylane_list_quotes',
-    description: 'Lister les devis avec filtres optionnels par date.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  
-  // CONTEXTE & EXPORTS (4)
-  {
-    name: 'pennylane_get_user_context',
-    description: 'Obtenir le contexte utilisateur actuel : profil, entreprise, exercices fiscaux.',
-    inputSchema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'pennylane_list_fiscal_years',
-    description: 'Lister tous les exercices fiscaux de l\'entreprise (ouverts, fermés, dates début/fin).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Nombre de résultats (max 100)', default: 50 },
-      },
-    },
-  },
-  {
-    name: 'pennylane_export_fec',
-    description: 'Lancer la génération d\'un export FEC (Fichier des Écritures Comptables) sur une période. Obligatoire pour les contrôles fiscaux en France. La génération est asynchrone : ce tool renvoie un export_id, puis pennylane_get_fec_export fournit le lien de téléchargement une fois l\'export prêt. Nécessite le scope "ledger".',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: 'Date de début (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'Date de fin (YYYY-MM-DD)' },
-      },
-      required: ['start_date', 'end_date'],
-    },
-  },
-  {
-    name: 'pennylane_get_fec_export',
-    description: 'Récupérer l\'état d\'un export FEC lancé par pennylane_export_fec, et son URL de téléchargement une fois le statut passé à "ready". Le lien expire au bout de 30 minutes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        export_id: { type: 'string', description: 'ID de l\'export renvoyé par pennylane_export_fec' },
-      },
-      required: ['export_id'],
-    },
-  },
-];
-
-// ============================================
-// TOOL IMPLEMENTATIONS
-// ============================================
-
-async function executeTool(name, args = {}) {
-  console.log(`[MCP] Tool: ${name}`, args);
-  
-  try {
-    switch (name) {
-      case 'pennylane_health_check': {
-        // `/me` renvoie { user, company, scopes } : les champs de l'utilisateur
-        // sont imbriques, pas a la racine.
-        const me = await pennylane('/me');
-        const fiscalYearsData = await pennylane('/fiscal_years');
-        const fiscalYears = asArray(fiscalYearsData, 'fiscal_years');
-        const txData = await pennylane('/transactions?limit=5');
-        const transactions = asArray(txData, 'transactions');
-
-        return {
-          status: 'ok',
-          timestamp: new Date().toISOString(),
-          connection: {
-            user: { email: me.user?.email, company: me.company?.name },
-            scopes: me.scopes ?? [],
-          },
-          fiscalYears: {
-            total: fiscalYears.length,
-            current: findCurrentFiscalYear(fiscalYears),
-          },
-          recentActivity: {
-            lastTransactions: transactions.length,
-            lastTransactionDate: transactions[0]?.date,
-          },
-        };
-      }
-      
-      case 'pennylane_list_customer_invoices': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/customer_invoices?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const invoices = asArray(data, 'invoices');
-        return { filters: { start_date, end_date }, count: invoices.length, invoices };
-      }
-      
-      case 'pennylane_analyze_customer_invoices': {
-        const { start_date, end_date } = args;
-        const filters = [
-          { field: 'date', operator: 'gteq', value: start_date },
-          { field: 'date', operator: 'lteq', value: end_date },
-        ];
-        
-        const url = `/customer_invoices?limit=100&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        const data = await pennylane(url);
-        const invoices = asArray(data, 'invoices');
-        
-        const totalRevenue = invoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0);
-        const paidInvoices = invoices.filter(inv => inv.status === 'paid' || inv.payment_status === 'paid');
-        const unpaidInvoices = invoices.filter(inv => ['pending', 'late', 'unpaid'].includes(inv.status || inv.payment_status));
-        
-        return {
-          period: { start_date, end_date },
-          summary: {
-            total_invoices: invoices.length,
-            total_revenue: totalRevenue,
-            average_invoice_amount: invoices.length > 0 ? totalRevenue / invoices.length : 0,
-          },
-          payment_status: {
-            paid: paidInvoices.length,
-            unpaid: unpaidInvoices.length,
-            paid_amount: paidInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0),
-            unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0),
-          },
-          invoices: invoices.slice(0, 10),
-        };
-      }
-      
-      case 'pennylane_get_customer_invoice': {
-        const { invoice_id } = args;
-        const invoice = await pennylane(`/customer_invoices/${invoice_id}`);
-        return { invoice };
-      }
-      
-      case 'pennylane_get_customer_invoice_matched_transactions': {
-        const { invoice_id } = args;
-        const data = await pennylane(`/customer_invoices/${invoice_id}/matched_transactions`);
-        const transactions = asArray(data, 'matched_transactions');
-        return {
-          invoice_id,
-          matched_transactions_count: transactions.length,
-          matched_transactions: transactions,
-        };
-      }
-      
-      case 'pennylane_list_supplier_invoices': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/supplier_invoices?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const invoices = asArray(data, 'invoices');
-        return { filters: { start_date, end_date }, count: invoices.length, invoices };
-      }
-      
-      case 'pennylane_analyze_supplier_invoices': {
-        const { start_date, end_date } = args;
-        const filters = [
-          { field: 'date', operator: 'gteq', value: start_date },
-          { field: 'date', operator: 'lteq', value: end_date },
-        ];
-        
-        const url = `/supplier_invoices?limit=100&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        const data = await pennylane(url);
-        const invoices = asArray(data, 'invoices');
-        
-        const totalExpenses = invoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0);
-        const paidInvoices = invoices.filter(inv => inv.status === 'paid' || inv.payment_status === 'paid');
-        const unpaidInvoices = invoices.filter(inv => ['pending', 'late', 'unpaid'].includes(inv.status || inv.payment_status));
-        
-        return {
-          period: { start_date, end_date },
-          summary: {
-            total_invoices: invoices.length,
-            total_expenses: totalExpenses,
-            average_invoice_amount: invoices.length > 0 ? totalExpenses / invoices.length : 0,
-          },
-          payment_status: {
-            paid: paidInvoices.length,
-            unpaid: unpaidInvoices.length,
-            paid_amount: paidInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0),
-            unpaid_amount: unpaidInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount || inv.total_amount || 0), 0),
-          },
-          invoices: invoices.slice(0, 10),
-        };
-      }
-      
-      case 'pennylane_get_supplier_invoice': {
-        const { invoice_id } = args;
-        const invoice = await pennylane(`/supplier_invoices/${invoice_id}`);
-        return { invoice };
-      }
-      
-      case 'pennylane_list_transactions': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/transactions?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const transactions = asArray(data, 'transactions');
-        return { filters: { start_date, end_date }, count: transactions.length, transactions };
-      }
-      
-      case 'pennylane_list_bank_accounts': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/bank_accounts?limit=${clampLimit(limit)}`);
-        const accounts = asArray(data, 'bank_accounts');
-        return { count: accounts.length, bank_accounts: accounts };
-      }
-      
-      case 'pennylane_get_customers': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/customers?limit=${clampLimit(limit)}`);
-        const customers = asArray(data, 'customers');
-        return { count: customers.length, customers };
-      }
-      
-      case 'pennylane_get_suppliers': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/suppliers?limit=${clampLimit(limit)}`);
-        const suppliers = asArray(data, 'suppliers');
-        return { count: suppliers.length, suppliers };
-      }
-      
-      case 'pennylane_list_categories': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/categories?limit=${clampLimit(limit)}`);
-        const categories = asArray(data, 'categories');
-        return { count: categories.length, categories };
-      }
-      
-      case 'pennylane_list_ledger_entries': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/ledger_entries?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const entries = asArray(data, 'ledger_entries');
-        return { filters: { start_date, end_date }, count: entries.length, entries };
-      }
-      
-      case 'pennylane_list_products': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/products?limit=${clampLimit(limit)}`);
-        const products = asArray(data, 'products');
-        return { count: products.length, products };
-      }
-      
-      case 'pennylane_list_journals': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/journals?limit=${clampLimit(limit)}`);
-        const journals = asArray(data, 'journals');
-        return { count: journals.length, journals };
-      }
-      
-      case 'pennylane_list_ledger_accounts': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/ledger_accounts?limit=${clampLimit(limit)}`);
-        const accounts = asArray(data, 'ledger_accounts');
-        return { count: accounts.length, ledger_accounts: accounts };
-      }
-      
-      case 'pennylane_list_quotes': {
-        const { start_date, end_date, limit = 50 } = args;
-        const filters = [];
-        if (start_date) filters.push({ field: 'date', operator: 'gteq', value: start_date });
-        if (end_date) filters.push({ field: 'date', operator: 'lteq', value: end_date });
-        
-        let url = `/quotes?limit=${clampLimit(limit)}`;
-        if (filters.length > 0) url += `&filter=${encodeURIComponent(JSON.stringify(filters))}`;
-        
-        const data = await pennylane(url);
-        const quotes = asArray(data, 'quotes');
-        return { filters: { start_date, end_date }, count: quotes.length, quotes };
-      }
-      
-      case 'pennylane_get_user_context': {
-        const me = await pennylane('/me');
-        const fiscalYearsData = await pennylane('/fiscal_years');
-        const fiscalYears = asArray(fiscalYearsData, 'fiscal_years');
-        const user = me.user || {};
-        const company = me.company || {};
-
-        return {
-          user: {
-            id: user.id,
-            email: user.email,
-            first_name: user.first_name,
-            last_name: user.last_name,
-            locale: user.locale,
-          },
-          company: {
-            id: company.id,
-            name: company.name,
-            // L'API expose `reg_no` (numero d'immatriculation), pas `siret`
-            // ni `vat_number`.
-            reg_no: company.reg_no,
-          },
-          // Scopes du token : indispensable pour comprendre pourquoi un tool
-          // renvoie 403.
-          scopes: me.scopes ?? [],
-          fiscal_years: fiscalYears,
-          current_fiscal_year: findCurrentFiscalYear(fiscalYears),
-        };
-      }
-      
-      case 'pennylane_list_fiscal_years': {
-        const { limit = 50 } = args;
-        const data = await pennylane(`/fiscal_years?limit=${clampLimit(limit)}`);
-        const fiscalYears = asArray(data, 'fiscal_years');
-        return { count: fiscalYears.length, fiscal_years: fiscalYears };
-      }
-      
-      case 'pennylane_export_fec': {
-        const { start_date, end_date } = args;
-        // L'endpoint est `/exports/fecs` (pluriel) et attend `period_start` /
-        // `period_end`. La generation est asynchrone : ce POST cree l'export,
-        // le fichier se recupere ensuite via pennylane_get_fec_export.
-        const data = await pennylane('/exports/fecs', {
-          method: 'POST',
-          body: { period_start: start_date, period_end: end_date },
-        });
-        return {
-          period: { start_date, end_date },
-          export_id: data.id,
-          status: data.status,
-          created_at: data.created_at,
-          note: "Generation asynchrone : appelez pennylane_get_fec_export avec cet export_id jusqu'a ce que le statut passe a \"ready\" pour obtenir l'URL de telechargement.",
-        };
-      }
-
-      case 'pennylane_get_fec_export': {
-        const { export_id } = args;
-        const data = await pennylane(`/exports/fecs/${export_id}`);
-        return {
-          export_id: data.id,
-          status: data.status,
-          // Le lien expire au bout de 30 minutes.
-          file_url: data.file_url ?? null,
-          ready: data.status === 'ready',
-        };
-      }
-      
-      default:
-        throw new Error(`Unknown tool: ${name}`);
-    }
-  } catch (error) {
-    console.error(`[MCP] Tool error:`, error);
-    // __mcpError sert uniquement au handler pour positionner `isError`,
-    // il est retire avant serialisation.
-    return {
-      __mcpError: true,
-      error: true,
-      message: error.message,
-      tool: name,
-    };
-  }
+  if (oauth && bearer) return Boolean(await oauth.verifyAccessToken(bearer));
+  return false;
 }
 
 // ============================================
@@ -693,12 +80,17 @@ function unauthorized() {
       id: null,
       error: { code: -32001, message: 'Unauthorized' },
     },
-    { status: 401, headers: { 'WWW-Authenticate': 'Bearer realm="mcp-pennylane-owl"' } },
+    {
+      status: 401,
+      // Avec OAuth, le defi pointe vers les metadonnees de ressource protegee :
+      // c'est ainsi que Claude et ChatGPT decouvrent le serveur d'autorisation.
+      headers: { 'WWW-Authenticate': oauth ? oauth.wwwAuthenticate() : 'Bearer realm="mcp-pennylane-owl"' },
+    },
   );
 }
 
 export async function POST(request) {
-  if (!isAuthorized(request)) {
+  if (!(await isAuthorized(request))) {
     console.warn('[MCP] Requete refusee : token absent ou invalide.');
     return unauthorized();
   }
@@ -743,7 +135,7 @@ export async function POST(request) {
       return Response.json({
         jsonrpc: '2.0',
         id,
-        result: { tools: TOOLS },
+        result: { tools: toolbox.definitions },
       });
     }
 
@@ -757,15 +149,13 @@ export async function POST(request) {
         });
       }
 
-      const result = await executeTool(name, params.arguments || {});
-      const isError = Boolean(result?.__mcpError);
-      if (isError) delete result.__mcpError;
+      const { text, isError } = await toolbox.call(name, params.arguments || {});
 
       return Response.json({
         jsonrpc: '2.0',
         id,
         result: {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text }],
           isError,
         },
       });
@@ -789,7 +179,7 @@ export async function POST(request) {
 // Ping public volontairement minimal : il ne revele ni la liste des tools
 // ni la configuration. Le detail exige le meme token que POST.
 export async function GET(request) {
-  if (!isAuthorized(request)) {
+  if (!(await isAuthorized(request))) {
     return Response.json({ name: 'mcp-pennylane-owl', status: 'running' });
   }
 
@@ -799,7 +189,7 @@ export async function GET(request) {
     status: 'running',
     api_version: 'v2 external',
     pennylane_token_configured: Boolean(TOKEN),
-    tools_count: TOOLS.length,
-    tools: TOOLS.map(t => t.name),
+    tools_count: toolbox.definitions.length,
+    tools: toolbox.definitions.map(t => t.name),
   });
 }

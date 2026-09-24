@@ -1,9 +1,12 @@
 # Serveur MCP Pennylane
 
 Expose la comptabilité [Pennylane](https://www.pennylane.com) à un assistant IA
-via le [Model Context Protocol](https://modelcontextprotocol.io). 22 tools en
-lecture seule : factures clients et fournisseurs, trésorerie, écritures, plan
-comptable, devis, export FEC.
+via le [Model Context Protocol](https://modelcontextprotocol.io) : 42 outils
+explicites (balance générale, écritures, factures, trésorerie, exports,
+historique des modifications…), et l'accès aux 174 opérations de l'API par
+recherche et appel validé, le tout construit sur le registre des opérations de
+la Company API v2. Les écritures se limitent à une liste blanche : catégories
+analytiques, clients, devis, pièces jointes, exports.
 
 Les endpoints appelés sont vérifiés contre le schéma OpenAPI officiel de la
 Company API v2.
@@ -15,7 +18,7 @@ Next.js et React.
 - [Prérequis](#prérequis)
 - [Déploiement](#déploiement)
 - [Connexion d'un client MCP](#connexion-dun-client-mcp)
-- [Les 22 tools](#les-22-tools)
+- [Les outils](#les-outils)
 - [Sécurité](#sécurité)
 - [Développement local](#développement-local)
 - [Dépannage](#dépannage)
@@ -29,6 +32,7 @@ JSON-RPC 2.0 sur un unique endpoint HTTP, et répond toujours en
 
 | Type de client | Fonctionne | Comment |
 | :--- | :---: | :--- |
+| Claude (web, Desktop, mobile) et ChatGPT | ✅ | Connecteur distant, OAuth 2.1 |
 | Clients MCP parlant HTTP (Dust, plateformes d'agents, intégrations maison) | ✅ | URL de l'endpoint + en-tête d'authentification |
 | Clients MCP en stdio uniquement (Claude Desktop et assimilés) | ✅ | via un pont HTTP tel que `mcp-remote` |
 | Appels directs (`curl`, scripts) | ✅ | POST JSON-RPC sur `/api/mcp` |
@@ -76,11 +80,18 @@ Dans Vercel : *Settings → Environment Variables*.
 | `PENNYLANE_API_TOKEN` | ✅ | Token d'API Pennylane |
 | `MCP_AUTH_TOKEN` | ✅ | Secret protégeant l'endpoint, généré à l'étape 2 |
 | `PENNYLANE_API_BASE_URL` | — | Défaut : `https://app.pennylane.com/api/external/v2` |
+| `MCP_PUBLIC_URL` | OAuth | URL publique de l'endpoint, par exemple `https://VOTRE-PROJET.vercel.app/api/mcp` |
+| `OAUTH_SIGNING_KEY` | OAuth | Clé de signature des jetons, générée par `openssl rand -hex 32` |
+| `OAUTH_OWNER_PASSWORD` | OAuth | Mot de passe du propriétaire, 16 caractères au moins |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | OAuth | Base Upstash Redis, injectées par l'intégration du Marketplace Vercel |
+
+OAuth, nécessaire pour Claude et ChatGPT, s'active quand ses cinq variables sont
+présentes. Sans elles, seul le secret partagé est accepté.
 
 Cochez les environnements voulus : **Production**, et **Preview** si vous
 souhaitez que les déploiements de preview restent utilisables.
 
-> ⚠️ Sans `MCP_AUTH_TOKEN`, le serveur répond `401` à toutes les requêtes. Ce
+> ⚠️ Sans `MCP_AUTH_TOKEN` ni OAuth, le serveur répond `401` à toutes les requêtes. Ce
 > comportement est délibéré : l'endpoint donne accès à l'intégralité d'une
 > comptabilité, il ne doit jamais être joignable sans authentification.
 
@@ -128,6 +139,22 @@ X-MCP-Token: VOTRE_MCP_AUTH_TOKEN
 > est un service externe : il n'a aucun accès aux variables d'environnement du
 > serveur.
 
+### Claude et ChatGPT (OAuth)
+
+Ces clients n'envoient pas d'en-tête personnalisé : ils se connectent par OAuth
+2.1. Ajoutez un connecteur MCP distant avec l'URL de l'endpoint. Le client
+découvre seul le serveur d'autorisation (`/.well-known/oauth-protected-resource`)
+et ouvre une page de consentement : saisissez le mot de passe du propriétaire
+(`OAUTH_OWNER_PASSWORD`) et autorisez.
+
+- Clients acceptés : ceux dont le document d'identification (*Client ID
+  Metadata Document*) est hébergé sur `claude.ai` ou `chatgpt.com`, avec une
+  redirection HTTPS.
+- Jeton d'accès valable 1 heure, renouvelé automatiquement par le client grâce
+  à un refresh token valable 90 jours, qui change à chaque usage.
+- Les clients capables d'envoyer un en-tête (Claude Code, `curl`, plateformes
+  d'agents) continuent d'utiliser le secret partagé.
+
 ### Client HTTP (Dust, plateformes d'agents, intégration maison)
 
 Renseignez l'URL de l'endpoint et l'en-tête d'authentification dans la
@@ -152,119 +179,131 @@ Ces clients ne parlent pas HTTP directement. Passez par un pont :
 }
 ```
 
-## Les 22 tools
+## Les outils
 
-Tous les tools sont en **lecture seule**. `pennylane_export_fec` est le seul à
-émettre un `POST` vers l'API Pennylane, pour demander la génération d'un export
-téléchargeable — il ne modifie aucune donnée comptable.
+Les outils de niveau 1 sont des relais fins vers les opérations de l'API,
+construits sur le registre : leurs paramètres suivent les noms et les types de
+la spec, et sont validés avant tout appel. Un paramètre inconnu ou mal typé
+produit une erreur qui cite les paramètres attendus ; aucun appel ne part. La
+liste complète, avec les opérations appelées, est dans
+[docs/architecture.md](docs/architecture.md#outils-de-niveau-1).
 
-La pagination est plafonnée à 100 éléments par appel (limite de l'API) : un
-`limit` supérieur est ramené à 100, une valeur invalide retombe sur 50.
+| Famille | Outils (préfixe `pennylane_`) |
+| :--- | :--- |
+| Contexte | `health_check`, `get_user_context`, `resolve_fiscal_period` |
+| Socle comptable | `get_trial_balance`, `list_ledger_entries`, `get_ledger_entry`, `list_ledger_entry_lines`, `list_ledger_accounts`, `list_journals`, `list_fiscal_years` |
+| Exports | `export_fec`, `get_fec_export`, `export_general_ledger`, `get_general_ledger_export`, `export_analytical_general_ledger`, `get_analytical_general_ledger_export` |
+| Historique des modifications | `list_changelog_ledger_entry_lines`, `list_changelog_transactions`, `list_changelog_supplier_invoices` |
+| Banque | `list_transactions`, `get_transaction`, `get_transaction_matched_invoices`, `list_bank_accounts` |
+| Achats | `list_supplier_invoices`, `get_supplier_invoice`, `get_supplier_invoice_matched_transactions`, `list_suppliers` |
+| Ventes | `list_customer_invoices`, `get_customer_invoice`, `get_customer_invoice_matched_transactions`, `list_customers` |
+| Devis | `list_quotes`, `get_quote`, `create_quote`, `update_quote` |
+| Facturation électronique | `get_pa_registrations` |
+| Analytique | `list_categories`, `create_category`, `update_category`, `list_category_groups`, `create_category_group`, `update_category_group` |
 
-> **Limite connue** : les tools de liste ne renvoient que la **première page**.
-> L'API Pennylane pagine par curseur (`cursor` / `next_cursor`), que le serveur
-> n'exploite pas encore. Au-delà de 100 éléments, les résultats sont donc
-> tronqués sans avertissement.
+**Écritures.** Seules les écritures de la liste blanche existent : devis et
+catégories (création, modification), création d'exports. Aucune écriture sur
+les transactions ni sur les écritures comptables.
 
-### Monitoring
+### Niveaux 2 et 3 : toutes les autres opérations
 
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_health_check` | — | Statut global : connexion, exercices, dernières transactions |
+Les 174 opérations de l'API restent accessibles par trois outils :
 
-Plusieurs exercices fiscaux peuvent être ouverts simultanément — Pennylane crée
-les exercices à venir à l'avance. L'exercice signalé comme courant est celui
-dont la période contient la date du jour, et non le premier de la liste marqué
-`open`.
+- `pennylane_search_operations` : recherche par mots-clés, en français ou en
+  anglais ; renvoie de quoi choisir, sans les schémas ;
+- `pennylane_describe_operation` : paramètres typés, corps, réponse, et si
+  l'opération peut être appelée ;
+- `pennylane_call_operation` : appel validé contre le registre avant tout
+  envoi. Les lectures sont libres ; les écritures se limitent à la liste
+  blanche de `lib/tools/write-whitelist.js` (catégories, clients, devis,
+  pièces jointes, exports). Aucune écriture sur les transactions ni sur les
+  écritures comptables, aucune suppression. Les abonnements webhook sont
+  exclus, lecture comprise, et l'envoi de fichier n'est pas encore pris en
+  charge.
 
-### Factures clients
+### Exercices fiscaux
 
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_customer_invoices` | `start_date`, `end_date`, `limit` | Lister les factures clients |
-| `pennylane_analyze_customer_invoices` | `start_date`\*, `end_date`\* | CA, impayés, montant moyen sur la période |
-| `pennylane_get_customer_invoice` | `invoice_id`\* | Détail d'une facture |
-| `pennylane_get_customer_invoice_matched_transactions` | `invoice_id`\* | Transactions bancaires rapprochées |
+Un exercice ne coïncide pas forcément avec l'année civile, et plusieurs peuvent
+être ouverts à la fois : Pennylane crée les exercices à venir à l'avance.
+`pennylane_resolve_fiscal_period` (`fiscal_year` : `"current"` ou identifiant)
+renvoie les bornes à reprendre en `start_date` et `end_date` dans les outils de
+liste. L'exercice courant est celui qui contient la date du jour, à Paris.
 
-### Factures fournisseurs
+### Balance générale
 
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_supplier_invoices` | `start_date`, `end_date`, `limit` | Lister les factures fournisseurs |
-| `pennylane_analyze_supplier_invoices` | `start_date`\*, `end_date`\* | Charges, impayés, montant moyen |
-| `pennylane_get_supplier_invoice` | `invoice_id`\* | Détail d'une facture |
+`pennylane_get_trial_balance` renvoie les débits, les crédits et le solde de
+chaque compte (`balance` = débits − crédits), calculé en centimes entiers à
+partir des montants de l'API, jamais en nombres flottants. Aucun total n'est
+calculé.
 
-### Trésorerie
+### Pagination
 
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_transactions` | `start_date`, `end_date`, `limit` | Transactions bancaires |
-| `pennylane_list_bank_accounts` | `limit` | Comptes bancaires, soldes, statuts de connexion |
+Les outils de liste renvoient la même enveloppe :
 
-### Contacts
+```json
+{ "items": [], "count": 50, "has_more": true, "next_cursor": "…", "truncated": false }
+```
 
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_get_customers` | `limit` | Clients |
-| `pennylane_get_suppliers` | `limit` | Fournisseurs |
+- `limit` : taille de page, bornée au maximum documenté par l'opération (100
+  en général), 50 par défaut.
+- `cursor` : la valeur `next_cursor` d'une réponse précédente, pour lire la
+  page suivante. Les filtres doivent être renvoyés à l'identique : le curseur
+  ne les mémorise pas.
+- `fetch_all` : lit aussi les pages suivantes, dans la limite de 10 pages, de
+  25 secondes et de 100 000 caractères. Si la liste reste incomplète,
+  `truncated` vaut `true`, un `message` l'explique, et `next_cursor` permet de
+  reprendre. Le plafond de taille protège la fenêtre de contexte du modèle :
+  les écritures d'un exercice complet pèsent plusieurs centaines de milliers
+  de caractères. Au-delà, mieux vaut resserrer les filtres, lire la balance
+  générale ou passer par l'export FEC.
+- `count` est le nombre d'éléments renvoyés, jamais un total de la ressource.
+- `response_format` : `markdown` par défaut, une ligne par élément, champs
+  vides omis ; `json` pour la réponse complète.
 
-### Comptabilité
+Les appels vers Pennylane sont espacés d'au moins 250 ms : l'API autorise
+25 requêtes par fenêtre de 5 secondes et par token. Un `429` est repris après
+le délai indiqué par l'en-tête `retry-after`, deux fois au plus.
 
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_categories` | `limit` | Catégories analytiques |
-| `pennylane_list_ledger_entries` | `start_date`, `end_date`, `limit` | Écritures comptables |
-| `pennylane_list_products` | `limit` | Catalogue produits et services |
-| `pennylane_list_journals` | `limit` | Journaux (ventes, achats, banque, OD) |
-| `pennylane_list_ledger_accounts` | `limit` | Plan comptable, classes 1 à 7 |
+### Exports : un flux en deux temps
 
-### Commercial
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_list_quotes` | `start_date`, `end_date`, `limit` | Devis |
-
-### Contexte et exports
-
-| Tool | Paramètres | Description |
-| :--- | :--- | :--- |
-| `pennylane_get_user_context` | — | Profil, entreprise, exercices fiscaux |
-| `pennylane_list_fiscal_years` | `limit` | Exercices fiscaux |
-| `pennylane_export_fec` | `start_date`\*, `end_date`\* | Lance un export FEC (contrôle fiscal français), renvoie un `export_id` |
-| `pennylane_get_fec_export` | `export_id`\* | État de l'export et URL de téléchargement une fois prêt |
-
-\* paramètre obligatoire. Les dates sont au format `YYYY-MM-DD`.
-
-### Export FEC : un flux en deux temps
-
-La génération d'un FEC est asynchrone côté Pennylane. `pennylane_export_fec`
-crée la demande et renvoie un `export_id` avec un statut `pending`. Il faut
-ensuite appeler `pennylane_get_fec_export` avec cet identifiant jusqu'à ce que
-le statut passe à `ready` : la réponse contient alors `file_url`, **valable
-30 minutes**. Cet export requiert le scope `ledger`.
+La génération d'un FEC, d'un grand livre ou d'un grand livre analytique est
+asynchrone côté Pennylane. L'outil `export_*` crée la demande et renvoie un
+`id` au statut `pending` ; l'outil `get_*_export` correspondant renvoie
+`file_url`, un lien temporaire, une fois le statut passé à `ready`. Ce fichier
+est destiné à un humain : pour analyser, la balance générale et les lignes
+d'écritures conviennent au modèle. Le FEC requiert le scope `exports:fec`.
 
 ### Scopes
 
 Le token Pennylane porte des scopes qui déterminent les endpoints accessibles.
-Un tool appelant une ressource hors scope échoue avec un message explicite du
-type `Access to this resource requires scope "ledger"`.
-`pennylane_get_user_context` et `pennylane_health_check` renvoient la liste des
-scopes du token : c'est le premier endroit à regarder devant un refus
-inexpliqué.
+Sur un refus `403`, le message d'erreur cite les scopes réels du token, lus sur
+`/me` : aucun scope manquant n'est deviné. `pennylane_get_user_context` et
+`pennylane_health_check` renvoient aussi cette liste.
 
-> **Note de compatibilité** : l'API Pennylane déploie une série de changements
-> de rupture pilotés par le paramètre `use_2026_api_changes` (ou l'en-tête
-> `X-Use-2026-API-Changes`). Ce serveur ne le positionne pas et s'en remet donc
-> au défaut appliqué par Pennylane, susceptible d'évoluer au fil des phases de
-> déploiement. À figer explicitement avant que la phase de *sunset* ne
-> s'applique.
+> **Note de compatibilité** : depuis le 1er juillet 2026, fin du déploiement
+> des [changements 2026 de l'API Pennylane](https://pennylane.readme.io/docs/2026-api-changes-guide),
+> le paramètre `use_2026_api_changes` et l'en-tête `X-Use-2026-API-Changes`
+> n'ont plus d'effet : seul le nouveau comportement existe (pagination par
+> curseur sur toutes les listes, scopes granulaires à la place de `ledger`).
+> Ce serveur ne les envoie pas.
 
 ## Sécurité
 
-**Ce que le serveur protège.** L'endpoint exige le secret partagé sur toute
-requête `POST` ainsi que sur le détail du `GET`. La comparaison se fait en temps
-constant. Sans `MCP_AUTH_TOKEN` configuré, le serveur refuse tout plutôt que de
-s'ouvrir : *fail-closed*.
+**Ce que le serveur protège.** L'endpoint exige le secret partagé ou un jeton
+OAuth sur toute requête `POST` ainsi que sur le détail du `GET`. La comparaison
+se fait en temps constant. Sans `MCP_AUTH_TOKEN` configuré, le secret partagé
+est refusé plutôt que de laisser l'endpoint ouvert : *fail-closed*.
+
+**OAuth.** Le serveur d'autorisation tourne sur la même origine que
+l'endpoint :
+
+- PKCE S256 obligatoire, jeton lié à cette ressource (`aud`) ;
+- code d'autorisation valable 60 secondes et à usage unique ;
+- refresh token renouvelé à chaque usage : s'il est présenté une seconde fois,
+  l'autorisation entière est révoquée ;
+- codes et refresh tokens stockés uniquement sous forme d'empreinte SHA-256 ;
+- après 5 mots de passe erronés depuis une même adresse en 15 minutes, ou 20
+  en une heure au total, la page de consentement refuse toute tentative.
 
 **Ce qui est public.** Un `GET` sans token renvoie uniquement
 `{"name":"…","status":"running"}` — ni la liste des tools, ni la configuration,
@@ -301,17 +340,56 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-50 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+202 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 
 Couverture : authentification (dont le *fail-closed*), négociation du protocole,
 catalogue de tools et cohérence des schémas, normalisation des réponses de
-l'API, bornes de pagination, remontée des erreurs, format des requêtes
-sortantes.
+l'API, pagination par curseur et `fetch_all`, cadence des appels et reprise
+après un `429`, remontée des erreurs, format des requêtes sortantes, serveur
+d'autorisation OAuth (PKCE, code à usage unique, rotation et détection de
+réutilisation des refresh tokens, limitation des essais de mot de passe).
 
-Les tests vivent dans `test/` et suivent la convention `*.test.js`. La CI
+Les tests vivent dans `test/` et suivent la convention `*.test.js`.
+
+**Fixtures d'or.** `test/fixtures/pennylane/` contient des réponses réelles de
+l'API (`/me`, `/fiscal_years`, `/trial_balance`, `/journals`), anonymisées par
+`scripts/anonymize-fixtures.mjs` : identités, identifiants et montants sont
+remplacés, les montants fictifs ne dépendant jamais des montants réels. Les
+captures brutes ne sont jamais versionnées. `test/fixtures.test.js` rejoue les
+outils contre ces fixtures, à date figée.
+ La CI
 GitHub Actions les exécute sur chaque pull request, avec le build.
+
+### Registre des opérations
+
+```bash
+npm run registry            # régénère lib/registry.json depuis openapi/accounting.json
+npm run registry:refresh    # télécharge la spec officielle, puis régénère
+```
+
+Le registre décrit les 174 opérations de la Company API v2. Il est vérifié
+avant chaque build : un registre désynchronisé de la spec, ou une opération
+utilisée par un outil qui disparaîtrait de la spec, fait échouer le build.
+
+### Test smoke
+
+```bash
+npm run build
+npm run smoke
+```
+
+Démarre le serveur de production sur un port libre, avec un secret MCP généré
+pour la durée du test, puis vérifie `initialize`, `tools/list` (nombre d'outils
+attendu, aucun doublon, poids sous 15 000 tokens) et un
+`pennylane_health_check` **contre le vrai Pennylane** : l'exercice courant doit
+contenir la date du jour, la liste des scopes doit être non vide. Exige
+`PENNYLANE_API_TOKEN`, dans l'environnement ou dans `.env.local`.
+
+La CI l'exécute après le build, avec le secret `PENNYLANE_API_TOKEN` du dépôt.
+Une pull request ouverte depuis un fork n'a pas accès à ce secret : elle échoue
+à cette étape.
 
 ## Dépannage
 
@@ -336,16 +414,15 @@ ou expiré, et non le secret MCP.
 
 ### `Pennylane API error 404`
 
-L'endpoint appelé n'existe pas sur la version d'API configurée. Vérifiez
-`PENNYLANE_API_BASE_URL` — la valeur par défaut inclut le segment `/external`,
-souvent oublié.
+L'identifiant demandé n'existe pas, ou l'endpoint n'existe pas sur la version
+d'API configurée. Dans le second cas, vérifiez `PENNYLANE_API_BASE_URL` : la
+valeur par défaut inclut le segment `/external`, souvent oublié.
 
-### Un tool renvoie `count: 0` sans erreur
+### Un outil de liste renvoie `count: 0` sans erreur
 
-Le serveur normalise les réponses de l'API, qui arrivent tantôt en tableau brut,
-tantôt en objet paginé. Une forme inconnue produit une liste vide plutôt qu'une
-exception. Si vous attendiez des données, vérifiez d'abord les filtres de date,
-puis la réponse brute de l'API sur le même endpoint.
+Vérifiez d'abord les filtres de date : ils raisonnent en dates calendaires, et
+un exercice ne coïncide pas forcément avec l'année civile.
+`pennylane_resolve_fiscal_period` donne les bornes exactes d'un exercice.
 
 ### Le client ne voit aucun tool
 

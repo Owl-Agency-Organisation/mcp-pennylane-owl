@@ -3,7 +3,7 @@
   "version": "1.4.0",
   "private": true,
   "type": "module",
-  "description": "Serveur MCP exposant la comptabilité Pennylane à un assistant IA. 22 tools en lecture seule, déployable sur Vercel.",
+  "description": "Serveur MCP exposant la comptabilité Pennylane à un assistant IA : 42 outils construits sur le registre de la Company API v2, écritures limitées à une liste blanche. Déployable sur Vercel.",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -20,9 +20,13 @@
   },
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/generate-registry.mjs --check",
     "build": "next build",
     "start": "next start",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "smoke": "node scripts/smoke.mjs",
+    "registry": "node scripts/generate-registry.mjs",
+    "registry:refresh": "node scripts/generate-registry.mjs --refresh"
   },
   "dependencies": {
     "next": "^15.1.7",
