@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { importHmacKey, signJwt } from '../lib/oauth/crypto.js';
 
 const ROUTE_URL = new URL('../app/api/mcp/route.js', import.meta.url).href;
 const MCP_TOKEN = 'secret-mcp-token-de-test';
@@ -47,12 +48,28 @@ beforeEach(() => {
 // requete casse le cache d'import pour obtenir une evaluation fraiche a
 // chaque configuration testee.
 let loadCounter = 0;
-async function loadRoute({ mcpToken = MCP_TOKEN, pennylaneToken = 'faux-token-pennylane' } = {}) {
+
+// Configuration OAuth de test. Le stockage n'est pas sollicite par la
+// verification d'un jeton d'acces, seul chemin exerce ici.
+const OAUTH_ENV = {
+  MCP_PUBLIC_URL: 'https://exemple.test/api/mcp',
+  OAUTH_SIGNING_KEY: 'ab'.repeat(32),
+  OAUTH_OWNER_PASSWORD: 'mot-de-passe-du-proprietaire-de-test',
+  KV_REST_API_URL: 'https://kv.exemple.test',
+  KV_REST_API_TOKEN: 'jeton-kv',
+};
+
+async function loadRoute({ mcpToken = MCP_TOKEN, pennylaneToken = 'faux-token-pennylane', oauth = false } = {}) {
   if (mcpToken === null) delete process.env.MCP_AUTH_TOKEN;
   else process.env.MCP_AUTH_TOKEN = mcpToken;
 
   if (pennylaneToken === null) delete process.env.PENNYLANE_API_TOKEN;
   else process.env.PENNYLANE_API_TOKEN = pennylaneToken;
+
+  for (const [name, value] of Object.entries(OAUTH_ENV)) {
+    if (oauth) process.env[name] = value;
+    else delete process.env[name];
+  }
 
   process.env.PENNYLANE_API_BASE_URL = 'https://api.test/v2';
 
@@ -137,6 +154,82 @@ describe('authentification', () => {
     const response = await POST(
       jsonRpcRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { authorization: 'Bearer ' }),
     );
+
+    assert.equal(response.status, 401);
+  });
+});
+
+describe('authentification OAuth', () => {
+  // Jeton d'acces tel que l'emet le serveur d'autorisation.
+  async function accessToken(overrides = {}) {
+    const iat = Math.floor(Date.now() / 1000);
+    return signJwt(
+      {
+        iss: 'https://exemple.test',
+        aud: OAUTH_ENV.MCP_PUBLIC_URL,
+        sub: 'owner',
+        scope: 'pennylane',
+        iat,
+        exp: iat + 3600,
+        ...overrides,
+      },
+      await importHmacKey(OAUTH_ENV.OAUTH_SIGNING_KEY),
+    );
+  }
+
+  const toolsList = headers => jsonRpcRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, headers);
+
+  it('pointe le defi 401 vers les metadonnees de ressource protegee', async () => {
+    const { POST } = await loadRoute({ oauth: true });
+    const response = await POST(toolsList());
+
+    assert.equal(response.status, 401);
+    assert.equal(
+      response.headers.get('www-authenticate'),
+      'Bearer resource_metadata="https://exemple.test/.well-known/oauth-protected-resource", scope="pennylane"',
+    );
+  });
+
+  it('accepte un jeton d acces emis pour cette ressource', async () => {
+    const { POST } = await loadRoute({ oauth: true });
+    const response = await POST(toolsList({ authorization: `Bearer ${await accessToken()}` }));
+
+    assert.equal(response.status, 200);
+  });
+
+  it('refuse un jeton emis pour une autre ressource', async () => {
+    const { POST } = await loadRoute({ oauth: true });
+    const token = await accessToken({ aud: 'https://autre.exemple/api/mcp' });
+    const response = await POST(toolsList({ authorization: `Bearer ${token}` }));
+
+    assert.equal(response.status, 401);
+  });
+
+  it('refuse un jeton expire', async () => {
+    const { POST } = await loadRoute({ oauth: true });
+    const token = await accessToken({ exp: Math.floor(Date.now() / 1000) - 1 });
+    const response = await POST(toolsList({ authorization: `Bearer ${token}` }));
+
+    assert.equal(response.status, 401);
+  });
+
+  it('accepte toujours le secret partage en parallele', async () => {
+    const { POST } = await loadRoute({ oauth: true });
+    const response = await POST(toolsList(AUTH));
+
+    assert.equal(response.status, 200);
+  });
+
+  it('accepte un jeton OAuth meme sans secret partage configure', async () => {
+    const { POST } = await loadRoute({ oauth: true, mcpToken: null });
+
+    assert.equal((await POST(toolsList({ authorization: 'Bearer ' }))).status, 401);
+    assert.equal((await POST(toolsList({ authorization: `Bearer ${await accessToken()}` }))).status, 200);
+  });
+
+  it('refuse un jeton OAuth quand OAuth n est pas configure', async () => {
+    const { POST } = await loadRoute();
+    const response = await POST(toolsList({ authorization: `Bearer ${await accessToken()}` }));
 
     assert.equal(response.status, 401);
   });

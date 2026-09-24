@@ -177,9 +177,33 @@ raisonner par exercice.
 ## Transport et authentification
 
 Endpoint unique `/api/mcp`, JSON-RPC 2.0 sur HTTP : Streamable HTTP, réponses
-JSON, sans état, sans SSE. Authentification par secret partagé
-(`Authorization: Bearer` ou `X-MCP-Token`). OAuth 2.1 est prévu en parallèle
-pour les clients qui l'exigent.
+JSON, sans état, sans SSE. Deux credentials acceptés :
+
+- **Secret partagé** (`Authorization: Bearer` ou `X-MCP-Token`), pour les
+  clients qui envoient un en-tête : Claude Code, scripts, plateformes d'agents.
+- **Jeton d'accès OAuth 2.1**, pour Claude et ChatGPT.
+
+### Serveur d'autorisation OAuth
+
+Il tourne sur la même origine que l'endpoint (`lib/oauth/`) et ne s'active
+que si sa configuration est complète.
+
+| Élément | Choix |
+| :--- | :--- |
+| Découverte | `/.well-known/oauth-protected-resource` (aussi sous `/api/mcp`), `/.well-known/oauth-authorization-server` ; le `401` porte `resource_metadata` |
+| Points d'entrée | `/oauth/authorize` (consentement), `/oauth/token` (form-urlencoded) |
+| Enregistrement des clients | CIMD uniquement, documents hébergés sur `claude.ai` ou `chatgpt.com`, redirections HTTPS uniquement. Pas de DCR |
+| Authentification | Mot de passe du propriétaire ; 5 échecs par adresse sur 15 min, 20 au total sur 1 h |
+| PKCE et ressource | S256 obligatoire ; `resource` doit désigner cet endpoint, recopié dans `aud` |
+| Jeton d'accès | JWT HS256, 1 h, vérifié sans stockage |
+| Code d'autorisation | 60 s, usage unique (`GETDEL`) |
+| Refresh token | 90 jours, rotation à chaque usage ; la réutilisation d'un jeton déjà échangé révoque toute l'autorisation |
+| Stockage | Upstash Redis, appelé en REST : codes, refresh tokens et compteurs d'échecs, par empreinte SHA-256 uniquement |
+| Scope | Unique : `pennylane` |
+
+Un jeton d'accès reste valable jusqu'à son expiration, même après révocation de
+son autorisation : la vérification sans stockage est à ce prix, borné à une
+heure.
 
 ## Outils de niveau 1
 

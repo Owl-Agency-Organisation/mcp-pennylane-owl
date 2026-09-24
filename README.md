@@ -29,6 +29,7 @@ JSON-RPC 2.0 sur un unique endpoint HTTP, et répond toujours en
 
 | Type de client | Fonctionne | Comment |
 | :--- | :---: | :--- |
+| Claude (web, Desktop, mobile) et ChatGPT | ✅ | Connecteur distant, OAuth 2.1 |
 | Clients MCP parlant HTTP (Dust, plateformes d'agents, intégrations maison) | ✅ | URL de l'endpoint + en-tête d'authentification |
 | Clients MCP en stdio uniquement (Claude Desktop et assimilés) | ✅ | via un pont HTTP tel que `mcp-remote` |
 | Appels directs (`curl`, scripts) | ✅ | POST JSON-RPC sur `/api/mcp` |
@@ -76,11 +77,18 @@ Dans Vercel : *Settings → Environment Variables*.
 | `PENNYLANE_API_TOKEN` | ✅ | Token d'API Pennylane |
 | `MCP_AUTH_TOKEN` | ✅ | Secret protégeant l'endpoint, généré à l'étape 2 |
 | `PENNYLANE_API_BASE_URL` | — | Défaut : `https://app.pennylane.com/api/external/v2` |
+| `MCP_PUBLIC_URL` | OAuth | URL publique de l'endpoint, par exemple `https://VOTRE-PROJET.vercel.app/api/mcp` |
+| `OAUTH_SIGNING_KEY` | OAuth | Clé de signature des jetons, générée par `openssl rand -hex 32` |
+| `OAUTH_OWNER_PASSWORD` | OAuth | Mot de passe du propriétaire, 16 caractères au moins |
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | OAuth | Base Upstash Redis, injectées par l'intégration du Marketplace Vercel |
+
+OAuth, nécessaire pour Claude et ChatGPT, s'active quand ses cinq variables sont
+présentes. Sans elles, seul le secret partagé est accepté.
 
 Cochez les environnements voulus : **Production**, et **Preview** si vous
 souhaitez que les déploiements de preview restent utilisables.
 
-> ⚠️ Sans `MCP_AUTH_TOKEN`, le serveur répond `401` à toutes les requêtes. Ce
+> ⚠️ Sans `MCP_AUTH_TOKEN` ni OAuth, le serveur répond `401` à toutes les requêtes. Ce
 > comportement est délibéré : l'endpoint donne accès à l'intégralité d'une
 > comptabilité, il ne doit jamais être joignable sans authentification.
 
@@ -127,6 +135,22 @@ X-MCP-Token: VOTRE_MCP_AUTH_TOKEN
 > Mettez la **valeur littérale** du secret, pas le nom de la variable. Le client
 > est un service externe : il n'a aucun accès aux variables d'environnement du
 > serveur.
+
+### Claude et ChatGPT (OAuth)
+
+Ces clients n'envoient pas d'en-tête personnalisé : ils se connectent par OAuth
+2.1. Ajoutez un connecteur MCP distant avec l'URL de l'endpoint. Le client
+découvre seul le serveur d'autorisation (`/.well-known/oauth-protected-resource`)
+et ouvre une page de consentement : saisissez le mot de passe du propriétaire
+(`OAUTH_OWNER_PASSWORD`) et autorisez.
+
+- Clients acceptés : ceux dont le document d'identification (*Client ID
+  Metadata Document*) est hébergé sur `claude.ai` ou `chatgpt.com`, avec une
+  redirection HTTPS.
+- Jeton d'accès valable 1 heure, renouvelé automatiquement par le client grâce
+  à un refresh token valable 90 jours, qui change à chaque usage.
+- Les clients capables d'envoyer un en-tête (Claude Code, `curl`, plateformes
+  d'agents) continuent d'utiliser le secret partagé.
 
 ### Client HTTP (Dust, plateformes d'agents, intégration maison)
 
@@ -284,10 +308,21 @@ inexpliqué.
 
 ## Sécurité
 
-**Ce que le serveur protège.** L'endpoint exige le secret partagé sur toute
-requête `POST` ainsi que sur le détail du `GET`. La comparaison se fait en temps
-constant. Sans `MCP_AUTH_TOKEN` configuré, le serveur refuse tout plutôt que de
-s'ouvrir : *fail-closed*.
+**Ce que le serveur protège.** L'endpoint exige le secret partagé ou un jeton
+OAuth sur toute requête `POST` ainsi que sur le détail du `GET`. La comparaison
+se fait en temps constant. Sans `MCP_AUTH_TOKEN` configuré, le secret partagé
+est refusé plutôt que de laisser l'endpoint ouvert : *fail-closed*.
+
+**OAuth.** Le serveur d'autorisation tourne sur la même origine que
+l'endpoint :
+
+- PKCE S256 obligatoire, jeton lié à cette ressource (`aud`) ;
+- code d'autorisation valable 60 secondes et à usage unique ;
+- refresh token renouvelé à chaque usage : s'il est présenté une seconde fois,
+  l'autorisation entière est révoquée ;
+- codes et refresh tokens stockés uniquement sous forme d'empreinte SHA-256 ;
+- après 5 mots de passe erronés depuis une même adresse en 15 minutes, ou 20
+  en une heure au total, la page de consentement refuse toute tentative.
 
 **Ce qui est public.** Un `GET` sans token renvoie uniquement
 `{"name":"…","status":"running"}` — ni la liste des tools, ni la configuration,
@@ -324,14 +359,16 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-80 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+123 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 
 Couverture : authentification (dont le *fail-closed*), négociation du protocole,
 catalogue de tools et cohérence des schémas, normalisation des réponses de
 l'API, pagination par curseur et `fetch_all`, cadence des appels et reprise
-après un `429`, remontée des erreurs, format des requêtes sortantes.
+après un `429`, remontée des erreurs, format des requêtes sortantes, serveur
+d'autorisation OAuth (PKCE, code à usage unique, rotation et détection de
+réutilisation des refresh tokens, limitation des essais de mot de passe).
 
 Les tests vivent dans `test/` et suivent la convention `*.test.js`. La CI
 GitHub Actions les exécute sur chaque pull request, avec le build.

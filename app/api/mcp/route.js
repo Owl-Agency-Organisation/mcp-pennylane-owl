@@ -10,6 +10,7 @@ import {
   FETCH_ALL_TIME_BUDGET_MS,
   FETCH_ALL_MAX_CHARS,
 } from '../../../lib/pagination.js';
+import { oauthFromEnv } from '../../../lib/oauth/env.js';
 
 const SERVER_VERSION = '1.4.0';
 
@@ -22,8 +23,12 @@ if (!TOKEN) {
 }
 
 if (!MCP_AUTH_TOKEN) {
-  console.error('[MCP] MCP_AUTH_TOKEN manquant : le serveur refusera toutes les requetes.');
+  console.error('[MCP] MCP_AUTH_TOKEN manquant : le secret partage est refuse.');
 }
+
+// Serveur d'autorisation OAuth, ou null s'il n'est pas configure : seul le
+// secret partage est alors accepte.
+const oauth = oauthFromEnv();
 
 // Revisions du protocole MCP que ce serveur sait servir, de la plus recente
 // a la plus ancienne. On renvoie celle demandee par le client si on la
@@ -47,16 +52,22 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-// Le token peut arriver via `Authorization: Bearer ...` (standard MCP) ou
-// via `X-MCP-Token` pour les clients qui ne laissent pas personnaliser
-// l'en-tete Authorization.
-function isAuthorized(request) {
-  if (!MCP_AUTH_TOKEN) return false;
+// Deux credentials acceptes :
+// - le secret partage, via `Authorization: Bearer ...` (standard MCP) ou via
+//   `X-MCP-Token` pour les clients qui ne laissent pas personnaliser
+//   l'en-tete Authorization ;
+// - un jeton d'acces OAuth emis par notre serveur d'autorisation pour cette
+//   ressource.
+async function isAuthorized(request) {
   const authHeader = request.headers.get('authorization') || '';
   const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-  if (bearer && safeEqual(bearer, MCP_AUTH_TOKEN)) return true;
-  const custom = (request.headers.get('x-mcp-token') || '').trim();
-  return Boolean(custom) && safeEqual(custom, MCP_AUTH_TOKEN);
+  if (MCP_AUTH_TOKEN) {
+    if (bearer && safeEqual(bearer, MCP_AUTH_TOKEN)) return true;
+    const custom = (request.headers.get('x-mcp-token') || '').trim();
+    if (custom && safeEqual(custom, MCP_AUTH_TOKEN)) return true;
+  }
+  if (oauth && bearer) return Boolean(await oauth.verifyAccessToken(bearer));
+  return false;
 }
 
 // Un exercice porte `start`, `finish` et un `status` parmi open, reopen,
@@ -620,12 +631,17 @@ function unauthorized() {
       id: null,
       error: { code: -32001, message: 'Unauthorized' },
     },
-    { status: 401, headers: { 'WWW-Authenticate': 'Bearer realm="mcp-pennylane-owl"' } },
+    {
+      status: 401,
+      // Avec OAuth, le defi pointe vers les metadonnees de ressource protegee :
+      // c'est ainsi que Claude et ChatGPT decouvrent le serveur d'autorisation.
+      headers: { 'WWW-Authenticate': oauth ? oauth.wwwAuthenticate() : 'Bearer realm="mcp-pennylane-owl"' },
+    },
   );
 }
 
 export async function POST(request) {
-  if (!isAuthorized(request)) {
+  if (!(await isAuthorized(request))) {
     console.warn('[MCP] Requete refusee : token absent ou invalide.');
     return unauthorized();
   }
@@ -718,7 +734,7 @@ export async function POST(request) {
 // Ping public volontairement minimal : il ne revele ni la liste des tools
 // ni la configuration. Le detail exige le meme token que POST.
 export async function GET(request) {
-  if (!isAuthorized(request)) {
+  if (!(await isAuthorized(request))) {
     return Response.json({ name: 'mcp-pennylane-owl', status: 'running' });
   }
 
