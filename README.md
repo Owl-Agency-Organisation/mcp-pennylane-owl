@@ -3,9 +3,10 @@
 Expose la comptabilité [Pennylane](https://www.pennylane.com) à un assistant IA
 via le [Model Context Protocol](https://modelcontextprotocol.io) : 42 outils
 explicites (balance générale, écritures, factures, trésorerie, exports,
-historique des modifications…), construits sur le registre des opérations de
-la Company API v2. Les écritures se limitent à une liste blanche : devis,
-catégories analytiques, exports.
+historique des modifications…), et l'accès aux 174 opérations de l'API par
+recherche et appel validé, le tout construit sur le registre des opérations de
+la Company API v2. Les écritures se limitent à une liste blanche : catégories
+analytiques, clients, devis, pièces jointes, exports.
 
 Les endpoints appelés sont vérifiés contre le schéma OpenAPI officiel de la
 Company API v2.
@@ -204,6 +205,22 @@ liste complète, avec les opérations appelées, est dans
 catégories (création, modification), création d'exports. Aucune écriture sur
 les transactions ni sur les écritures comptables.
 
+### Niveaux 2 et 3 : toutes les autres opérations
+
+Les 174 opérations de l'API restent accessibles par trois outils :
+
+- `pennylane_search_operations` : recherche par mots-clés, en français ou en
+  anglais ; renvoie de quoi choisir, sans les schémas ;
+- `pennylane_describe_operation` : paramètres typés, corps, réponse, et si
+  l'opération peut être appelée ;
+- `pennylane_call_operation` : appel validé contre le registre avant tout
+  envoi. Les lectures sont libres ; les écritures se limitent à la liste
+  blanche de `lib/tools/write-whitelist.js` (catégories, clients, devis,
+  pièces jointes, exports). Aucune écriture sur les transactions ni sur les
+  écritures comptables, aucune suppression. Les abonnements webhook sont
+  exclus, lecture comprise, et l'envoi de fichier n'est pas encore pris en
+  charge.
+
 ### Exercices fiscaux
 
 Un exercice ne coïncide pas forcément avec l'année civile, et plusieurs peuvent
@@ -323,7 +340,7 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-180 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+202 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 

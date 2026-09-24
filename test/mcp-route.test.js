@@ -323,13 +323,13 @@ describe('protocole MCP', () => {
 });
 
 describe('catalogue de tools', () => {
-  it('expose 42 tools aux noms uniques et prefixes', async () => {
+  it('expose 45 tools aux noms uniques et prefixes', async () => {
     const { POST } = await loadRoute();
     const response = await POST(jsonRpcRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, AUTH));
     const { result } = await response.json();
     const names = result.tools.map(tool => tool.name);
 
-    assert.equal(result.tools.length, 42);
+    assert.equal(result.tools.length, 45);
     assert.equal(new Set(names).size, names.length);
     assert.ok(names.every(name => name.startsWith('pennylane_')));
   });
@@ -650,8 +650,8 @@ describe('GET', () => {
     const { GET } = await loadRoute();
     const body = await (await GET(new Request('https://exemple.test/api/mcp', { headers: AUTH }))).json();
 
-    assert.equal(body.tools_count, 42);
-    assert.equal(body.tools.length, 42);
+    assert.equal(body.tools_count, 45);
+    assert.equal(body.tools.length, 45);
     assert.equal(body.pennylane_token_configured, true);
   });
 

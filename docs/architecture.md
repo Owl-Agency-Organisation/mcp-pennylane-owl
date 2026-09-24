@@ -69,11 +69,17 @@ Les clients n'ont pas d'outil de niveau 1 : leur création et leur
 modification passent par le niveau 3. Les annexes de factures clients et de
 documents commerciaux restent hors périmètre.
 
+La liste blanche est tenue opération par opération dans
+`lib/tools/write-whitelist.js`. Les opérations au rattachement ambigu en sont
+exclues jusqu'à décision explicite : changement de statut et envoi par email
+d'un devis, contacts et catégories d'un client. L'envoi de fichier
+(`multipart/form-data`) est refusé tant que son mécanisme n'est pas arbitré.
+
 Toute autre écriture est refusée avec un message explicite, en particulier sur
 les transactions et les écritures comptables. Les abonnements webhook sont
 exclus à tous les niveaux tant que le récepteur de webhooks n'existe pas :
-aucun outil de niveau 1, et la liste blanche de `pennylane_call_operation` les
-refuse.
+aucun outil de niveau 1, ni recherche, ni description, ni appel, lecture
+comprise.
 
 ## Registre des opérations
 
