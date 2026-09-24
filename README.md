@@ -313,6 +313,24 @@ sortantes.
 Les tests vivent dans `test/` et suivent la convention `*.test.js`. La CI
 GitHub Actions les exécute sur chaque pull request, avec le build.
 
+### Test smoke
+
+```bash
+npm run build
+npm run smoke
+```
+
+Démarre le serveur de production sur un port libre, avec un secret MCP généré
+pour la durée du test, puis vérifie `initialize`, `tools/list` (nombre d'outils
+attendu, aucun doublon, poids sous 15 000 tokens) et un
+`pennylane_health_check` **contre le vrai Pennylane** : l'exercice courant doit
+contenir la date du jour, la liste des scopes doit être non vide. Exige
+`PENNYLANE_API_TOKEN`, dans l'environnement ou dans `.env.local`.
+
+La CI l'exécute après le build, avec le secret `PENNYLANE_API_TOKEN` du dépôt.
+Une pull request ouverte depuis un fork n'a pas accès à ce secret : elle échoue
+à cette étape.
+
 ## Dépannage
 
 ### `401 Unauthorized`
