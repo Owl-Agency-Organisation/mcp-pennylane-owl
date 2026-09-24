@@ -260,23 +260,23 @@ La génération d'un FEC est asynchrone côté Pennylane. `pennylane_export_fec`
 crée la demande et renvoie un `export_id` avec un statut `pending`. Il faut
 ensuite appeler `pennylane_get_fec_export` avec cet identifiant jusqu'à ce que
 le statut passe à `ready` : la réponse contient alors `file_url`, **valable
-30 minutes**. Cet export requiert le scope `ledger`.
+30 minutes**. Cet export requiert le scope `exports:fec`.
 
 ### Scopes
 
 Le token Pennylane porte des scopes qui déterminent les endpoints accessibles.
 Un tool appelant une ressource hors scope échoue avec un message explicite du
-type `Access to this resource requires scope "ledger"`.
+type `Access to this resource requires scope "exports:fec"`.
 `pennylane_get_user_context` et `pennylane_health_check` renvoient la liste des
 scopes du token : c'est le premier endroit à regarder devant un refus
 inexpliqué.
 
-> **Note de compatibilité** : l'API Pennylane déploie une série de changements
-> de rupture pilotés par le paramètre `use_2026_api_changes` (ou l'en-tête
-> `X-Use-2026-API-Changes`). Ce serveur ne le positionne pas et s'en remet donc
-> au défaut appliqué par Pennylane, susceptible d'évoluer au fil des phases de
-> déploiement. À figer explicitement avant que la phase de *sunset* ne
-> s'applique.
+> **Note de compatibilité** : depuis le 1er juillet 2026, fin du déploiement
+> des [changements 2026 de l'API Pennylane](https://pennylane.readme.io/docs/2026-api-changes-guide),
+> le paramètre `use_2026_api_changes` et l'en-tête `X-Use-2026-API-Changes`
+> n'ont plus d'effet : seul le nouveau comportement existe (pagination par
+> curseur sur toutes les listes, scopes granulaires à la place de `ledger`).
+> Ce serveur ne les envoie pas.
 
 ## Sécurité
 
