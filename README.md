@@ -359,7 +359,7 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-123 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+129 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 
@@ -370,7 +370,15 @@ après un `429`, remontée des erreurs, format des requêtes sortantes, serveur
 d'autorisation OAuth (PKCE, code à usage unique, rotation et détection de
 réutilisation des refresh tokens, limitation des essais de mot de passe).
 
-Les tests vivent dans `test/` et suivent la convention `*.test.js`. La CI
+Les tests vivent dans `test/` et suivent la convention `*.test.js`.
+
+**Fixtures d'or.** `test/fixtures/pennylane/` contient des réponses réelles de
+l'API (`/me`, `/fiscal_years`, `/trial_balance`, `/journals`), anonymisées par
+`scripts/anonymize-fixtures.mjs` : identités, identifiants et montants sont
+remplacés, les montants fictifs ne dépendant jamais des montants réels. Les
+captures brutes ne sont jamais versionnées. `test/fixtures.test.js` rejoue les
+outils contre ces fixtures, à date figée.
+ La CI
 GitHub Actions les exécute sur chaque pull request, avec le build.
 
 ### Test smoke

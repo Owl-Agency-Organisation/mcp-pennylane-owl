@@ -1,0 +1,44 @@
+{
+  "user": {
+    "id": 100001,
+    "first_name": "Prénom",
+    "last_name": "Nom",
+    "email": "proprietaire@exemple.test",
+    "locale": "fr"
+  },
+  "company": {
+    "id": 200001,
+    "name": "Entreprise Exemple",
+    "reg_no": "000000000",
+    "accounting_logic": "FR_PCG"
+  },
+  "scopes": [
+    "companies:webhook_subscriptions:all",
+    "file_attachments:all",
+    "trial_balance:readonly",
+    "pa_registrations:readonly",
+    "bank_establishments:readonly",
+    "fiscal_years:readonly",
+    "exports:fec",
+    "exports:gl",
+    "exports:agl",
+    "customer_invoice_templates:readonly",
+    "billing_subscriptions:readonly",
+    "categories:all",
+    "customers:all",
+    "bank_accounts:readonly",
+    "ledger_accounts:readonly",
+    "purchase_requests:readonly",
+    "quotes:all",
+    "commercial_documents:readonly",
+    "ledger_entries:readonly",
+    "customer_invoices:readonly",
+    "supplier_invoices:readonly",
+    "suppliers:readonly",
+    "journals:readonly",
+    "customer_mandates:readonly",
+    "products:readonly",
+    "transactions:readonly",
+    "flows:read"
+  ]
+}
