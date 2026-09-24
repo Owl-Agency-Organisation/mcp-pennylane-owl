@@ -172,9 +172,13 @@ enveloppe :
 - `cursor` : la valeur `next_cursor` d'une réponse précédente, pour lire la
   page suivante. Les filtres doivent être renvoyés à l'identique : le curseur
   ne les mémorise pas.
-- `fetch_all` : lit aussi les pages suivantes, dans la limite de 10 pages et de
-  25 secondes. Si la liste reste incomplète, `truncated` vaut `true`, un
-  `message` l'explique, et `next_cursor` permet de reprendre.
+- `fetch_all` : lit aussi les pages suivantes, dans la limite de 10 pages, de
+  25 secondes et de 100 000 caractères. Si la liste reste incomplète,
+  `truncated` vaut `true`, un `message` l'explique, et `next_cursor` permet de
+  reprendre. Le plafond de taille protège la fenêtre de contexte du modèle :
+  les écritures d'un exercice complet pèsent plusieurs centaines de milliers
+  de caractères. Au-delà, mieux vaut resserrer les filtres, lire la balance
+  générale ou passer par l'export FEC.
 - `count` est le nombre d'éléments renvoyés, jamais un total de la ressource.
 
 Les appels vers Pennylane sont espacés d'au moins 250 ms : l'API autorise
@@ -320,7 +324,7 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-76 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+80 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 

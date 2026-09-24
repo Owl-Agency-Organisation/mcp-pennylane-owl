@@ -105,9 +105,12 @@ Tout outil de liste renvoie la même enveloppe :
 - `has_more` et `next_cursor` sont toujours remontés, tels que Pennylane les
   renvoie.
 - `fetch_all` (optionnel, `false` par défaut) parcourt les pages suivantes,
-  dans la limite d'un nombre maximal de pages et du temps d'exécution d'une
-  fonction Vercel. S'il s'arrête avant la fin : `truncated: true` et un message
-  explicite.
+  dans la limite d'un nombre maximal de pages, du temps d'exécution d'une
+  fonction Vercel et d'une taille de réponse (`FETCH_ALL_MAX_CHARS`,
+  100 000 caractères de JSON compact, pour ne pas saturer le contexte du
+  modèle). S'il s'arrête avant la fin : `truncated: true` et un message
+  explicite. Au-delà du plafond de taille, le message oriente vers des filtres
+  plus étroits, `pennylane_get_trial_balance` ou l'export FEC.
 - Aucun outil ne renvoie un total calculé à partir d'une page. `count` est le
   nombre d'éléments renvoyés, pas le total de la ressource.
 
@@ -144,6 +147,8 @@ un message qui indique la suite :
 Un message d'erreur n'expose jamais de détail interne ni le token.
 
 ### Format de réponse
+
+Le résultat d'un outil est sérialisé en JSON compact, sans indentation.
 
 Paramètre `response_format: "json" | "markdown"`, `"markdown"` par défaut sur
 les listes : plus compact pour le modèle sur les grandes listes. Le JSON reste

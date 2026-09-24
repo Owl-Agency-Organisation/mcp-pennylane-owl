@@ -501,6 +501,15 @@ describe('remontee des erreurs', () => {
     assert.equal(result.isError, true);
   });
 
+  it('serialise le resultat en JSON compact', async () => {
+    const { POST } = await loadRoute();
+    respondWith = () => ({ items: [{ id: 1, label: 'a' }], has_more: false, next_cursor: null });
+
+    const { result, payload } = await callTool(POST, 'pennylane_list_journals');
+
+    assert.equal(result.content[0].text, JSON.stringify(payload));
+  });
+
   it('n appelle pas l API et n est pas en erreur sur un appel nominal', async () => {
     const { POST } = await loadRoute();
     respondWith = () => ({ items: [{ id: 1 }] });

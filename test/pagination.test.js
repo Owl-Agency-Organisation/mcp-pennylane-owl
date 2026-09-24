@@ -129,6 +129,43 @@ describe('pagination : fetch_all', () => {
     assert.match(envelope.message, /sans fournir de curseur/);
   });
 
+  it('ecarte la page qui ferait depasser le plafond de taille, et reprend a son curseur', async () => {
+    const { fetchPage, seen } = chainedPages(5);
+    // Une page vaut 12 caracteres ([{"page":0}]) : deux pages tiennent dans 30.
+    const envelope = await paginate(fetchPage, { fetchAll: true, maxChars: 30 });
+
+    assert.deepEqual(seen, [null, 'c1', 'c2']);
+    assert.deepEqual(envelope.items, [{ page: 0 }, { page: 1 }]);
+    assert.ok(JSON.stringify(envelope.items).length <= 30);
+    assert.equal(envelope.has_more, true);
+    assert.equal(envelope.next_cursor, 'c2', 'la page ecartee doit etre relue a la reprise');
+    assert.equal(envelope.truncated, true);
+    assert.match(envelope.message, /pennylane_get_trial_balance/);
+    assert.match(envelope.message, /FEC/);
+    assert.match(envelope.message, /filtres/);
+  });
+
+  it('rend toujours la premiere page, meme au-dela du plafond de taille', async () => {
+    const { fetchPage, seen } = chainedPages(3);
+
+    const envelope = await paginate(fetchPage, { fetchAll: true, maxChars: 5 });
+
+    assert.deepEqual(seen, [null, 'c1']);
+    assert.deepEqual(envelope.items, [{ page: 0 }]);
+    assert.equal(envelope.next_cursor, 'c1');
+    assert.equal(envelope.truncated, true);
+  });
+
+  it('n applique pas le plafond de taille sans fetch_all', async () => {
+    const { fetchPage } = chainedPages(3);
+
+    const envelope = await paginate(fetchPage, { maxChars: 5 });
+
+    assert.equal(envelope.count, 1);
+    assert.equal(envelope.truncated, false);
+    assert.equal(envelope.message, undefined);
+  });
+
   it('reprend depuis un curseur fourni', async () => {
     const { fetchPage, seen } = chainedPages(4);
 
