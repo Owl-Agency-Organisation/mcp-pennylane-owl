@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 // Nombre d'outils attendu. A mettre a jour a chaque changement delibere du
 // catalogue : un outil perdu ou ajoute par erreur fait echouer le smoke.
-const EXPECTED_TOOL_COUNT = 42;
+const EXPECTED_TOOL_COUNT = 45;
 
 // Budget de poids de tools/list. Faute de tokenizer sans dependance, on
 // estime 3 caracteres par token : plus severe que le ratio usuel de 4, pour
