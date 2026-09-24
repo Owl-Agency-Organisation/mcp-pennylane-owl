@@ -151,9 +151,9 @@ disponible pour un traitement programmatique.
 
 ### Version de l'API
 
-Le drapeau `use_2026_api_changes` est figé dans une constante commentée et
-datée, plutôt que laissé au défaut de Pennylane, qui évolue par phases
-(*preview*, *sunset*, *cleanup*).
+Aucun drapeau `use_2026_api_changes` : depuis le 01/07/2026, fin du
+déploiement par phases de Pennylane (*preview*, *sunset*, *cleanup*), seul le
+comportement 2026 existe. Ni le paramètre ni l'en-tête ne sont envoyés.
 
 ### Exercices fiscaux
 

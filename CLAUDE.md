@@ -37,7 +37,7 @@ Architecture inchangée : GitHub vers Vercel, Next.js, endpoint unique
 | Registre | Généré au build depuis la spec OpenAPI, committé, aucune lecture réseau au runtime |
 | Pagination | Aucun outil ne renvoie un total calculé sur une page |
 | Débit | Voir « Contrainte de débit » |
-| `use_2026_api_changes` | Valeur figée explicitement dans une constante commentée et datée |
+| `use_2026_api_changes` | Aucun drapeau : depuis le 01/07/2026 (phase *cleanup* du déploiement Pennylane), l'opt-in et l'opt-out sont désactivés et seul le comportement 2026 existe. Ni le paramètre ni l'en-tête `X-Use-2026-API-Changes` ne sont envoyés |
 
 ## Contrainte de débit
 
