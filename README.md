@@ -1,12 +1,14 @@
 # Serveur MCP Pennylane
 
 Expose la comptabilité [Pennylane](https://www.pennylane.com) à un assistant IA
-via le [Model Context Protocol](https://modelcontextprotocol.io) : 42 outils
-explicites (balance générale, écritures, factures, trésorerie, exports,
-historique des modifications…), et l'accès aux 174 opérations de l'API par
-recherche et appel validé, le tout construit sur le registre des opérations de
-la Company API v2. Les écritures se limitent à une liste blanche : catégories
-analytiques, clients, devis, pièces jointes, exports.
+via le [Model Context Protocol](https://modelcontextprotocol.io) : 55 outils
+explicites (balance générale, écritures, factures, trésorerie, clients, devis,
+exports, historique des modifications…), et l'accès aux 174 opérations de
+l'API par recherche et appel validé, le tout construit sur le registre des
+opérations de la Company API v2. Les écritures se limitent à une liste
+blanche : catégories analytiques, clients et contacts, devis, factures clients
+en brouillon uniquement, pièces jointes, exports. Aucun envoi au client, aucune
+finalisation de facture.
 
 Les endpoints appelés sont vérifiés contre le schéma OpenAPI officiel de la
 Company API v2.
@@ -196,14 +198,27 @@ liste complète, avec les opérations appelées, est dans
 | Historique des modifications | `list_changelog_ledger_entry_lines`, `list_changelog_transactions`, `list_changelog_supplier_invoices` |
 | Banque | `list_transactions`, `get_transaction`, `get_transaction_matched_invoices`, `list_bank_accounts` |
 | Achats | `list_supplier_invoices`, `get_supplier_invoice`, `get_supplier_invoice_matched_transactions`, `list_suppliers` |
-| Ventes | `list_customer_invoices`, `get_customer_invoice`, `get_customer_invoice_matched_transactions`, `list_customers` |
-| Devis | `list_quotes`, `get_quote`, `create_quote`, `update_quote` |
+| Ventes | `list_customer_invoices`, `get_customer_invoice`, `get_customer_invoice_matched_transactions` |
+| Clients | `list_customers`, `get_customer`, `create_company_customer`, `update_company_customer`, `create_individual_customer`, `update_individual_customer`, `list_customer_contacts`, `create_customer_contact`, `update_customer_contact` |
+| Factures clients en brouillon | `create_customer_invoice_draft`, `create_customer_invoice_from_quote`, `update_customer_invoice_draft`, `delete_customer_invoice_draft` |
+| Devis | `list_quotes`, `get_quote`, `create_quote`, `update_quote`, `update_quote_status` |
 | Facturation électronique | `get_pa_registrations` |
 | Analytique | `list_categories`, `create_category`, `update_category`, `list_category_groups`, `create_category_group`, `update_category_group` |
 
-**Écritures.** Seules les écritures de la liste blanche existent : devis et
-catégories (création, modification), création d'exports. Aucune écriture sur
-les transactions ni sur les écritures comptables.
+**Écritures.** Seules les écritures de la liste blanche existent : clients et
+contacts, devis (dont le statut), catégories (création, modification),
+factures clients en brouillon (création, modification, suppression), création
+d'exports. Aucune écriture sur les transactions ni sur les écritures
+comptables, aucun envoi au client.
+
+**Factures : brouillons uniquement.** Le serveur ne finalise jamais une
+facture : une facture finalisée porte un numéro définitif et ne s'annule que
+par un avoir. La création exige `draft: true` (les outils dédiés le fixent
+eux-mêmes) ; la modification et la suppression relisent la facture et sont
+refusées si elle n'est plus en brouillon. La finalisation se fait dans
+Pennylane. Après création ou modification d'une facture ou d'un devis, la
+réponse commence par un résumé : numéro, statut, montants HT, TVA, TTC, lien
+du PDF.
 
 ### Niveaux 2 et 3 : toutes les autres opérations
 
@@ -215,11 +230,12 @@ Les 174 opérations de l'API restent accessibles par trois outils :
   l'opération peut être appelée ;
 - `pennylane_call_operation` : appel validé contre le registre avant tout
   envoi. Les lectures sont libres ; les écritures se limitent à la liste
-  blanche de `lib/tools/write-whitelist.js` (catégories, clients, devis,
-  pièces jointes, exports). Aucune écriture sur les transactions ni sur les
-  écritures comptables, aucune suppression. Les abonnements webhook sont
-  exclus, lecture comprise, et l'envoi de fichier n'est pas encore pris en
-  charge.
+  blanche de `lib/tools/write-whitelist.js` (catégories, clients et contacts,
+  devis, factures clients en brouillon, pièces jointes, exports), avec le même
+  garde-fou brouillon. Aucune écriture sur les transactions ni sur les
+  écritures comptables, aucune finalisation, aucun envoi ; seule suppression
+  possible : une facture en brouillon. Les abonnements webhook sont exclus,
+  lecture comprise, et l'envoi de fichier n'est pas encore pris en charge.
 
 ### Exercices fiscaux
 
@@ -340,7 +356,7 @@ npm run dev                  # http://localhost:3000
 npm test
 ```
 
-202 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
+234 tests sur le runner intégré de Node (`node --test`) — aucune dépendance de
 test, aucun fichier de configuration. Ils appellent les handlers directement
 avec `fetch` mocké : **aucun appel réel à Pennylane, aucun token nécessaire**.
 

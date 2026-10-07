@@ -60,20 +60,34 @@ d'écriture ne l'est que si elle figure dans la liste blanche :
 | Domaine | Écritures autorisées |
 | :--- | :--- |
 | Catégories et groupes de catégories | Création, modification |
-| Clients | Création, modification |
-| Devis | Création, modification |
+| Clients et contacts | Création, modification |
+| Devis | Création, modification, changement de statut |
+| Factures clients | **Brouillons uniquement** : création, création depuis un devis, modification, suppression |
 | Pièces jointes | Ajout de fichiers (`POST /file_attachments`) et annexes de devis (`POST /quotes/{quote_id}/appendices`) |
 | Exports | Création : FEC, grand livre, grand livre analytique |
 
-Les clients n'ont pas d'outil de niveau 1 : leur création et leur
-modification passent par le niveau 3. Les annexes de factures clients et de
-documents commerciaux restent hors périmètre.
-
 La liste blanche est tenue opération par opération dans
-`lib/tools/write-whitelist.js`. Les opérations au rattachement ambigu en sont
-exclues jusqu'à décision explicite : changement de statut et envoi par email
-d'un devis, contacts et catégories d'un client. L'envoi de fichier
+`lib/tools/write-whitelist.js`. En restent exclus : la finalisation d'une
+facture, tout envoi (email d'un devis ou d'une facture, transmission à la
+plateforme agréée), le marquage comme payée, les rapprochements, les
+catégories d'un client et les produits. L'envoi de fichier
 (`multipart/form-data`) est refusé tant que son mécanisme n'est pas arbitré.
+
+### Garde-fou : factures en brouillon
+
+Une facture finalisée porte un numéro définitif et une écriture comptable :
+elle ne s'annule que par un avoir. Le serveur ne la finalise donc jamais.
+Le garde-fou vit dans `lib/write-guards.js` et s'applique dans
+`callOperation`, point de passage unique des niveaux 1 et 3, après la
+validation des paramètres et avant l'appel :
+
+| Opération | Règle |
+| :--- | :--- |
+| `postCustomerInvoices`, `createCustomerInvoiceFromQuote` | `draft: true` exigé explicitement. Un corps sans `draft` correspondrait à la variante finalisée du schéma |
+| `updateCustomerInvoice`, `deleteCustomerInvoices` | Facture relue (`GET /customer_invoices/{id}`) ; refus si elle n'est pas en brouillon. Coût : un appel de plus |
+
+Un refus cite le statut et le numéro de la facture et oriente vers un avoir
+dans Pennylane.
 
 Toute autre écriture est refusée avec un message explicite, en particulier sur
 les transactions et les écritures comptables. Les abonnements webhook sont
@@ -307,10 +321,53 @@ lecture des pièces jointes.
 | `pennylane_list_customer_invoices` | `GET /customer_invoices` | Existant |
 | `pennylane_get_customer_invoice` | `GET /customer_invoices/{id}` | Existant |
 | `pennylane_get_customer_invoice_matched_transactions` | `GET /customer_invoices/{customer_invoice_id}/matched_transactions` | Existant |
-| `pennylane_list_customers` | `GET /customers` | Renommé (`pennylane_get_customers`) |
 
 La description de `pennylane_get_customer_invoice` précise que la facture
 porte son statut e-facture (`e_invoicing`). Aucun outil dédié.
+
+### Clients
+
+| Outil | Opération | Statut |
+| :--- | :--- | :--- |
+| `pennylane_list_customers` | `GET /customers` | Renommé (`pennylane_get_customers`) |
+| `pennylane_get_customer` | `GET /customers/{id}` | Nouveau (étape 12) |
+| `pennylane_create_company_customer` | `POST /company_customers` | Nouveau (étape 12) |
+| `pennylane_update_company_customer` | `PUT /company_customers/{id}` | Nouveau (étape 12) |
+| `pennylane_create_individual_customer` | `POST /individual_customers` | Nouveau (étape 12) |
+| `pennylane_update_individual_customer` | `PUT /individual_customers/{id}` | Nouveau (étape 12) |
+| `pennylane_list_customer_contacts` | `GET /customers/{customer_id}/contacts` | Nouveau (étape 12) |
+| `pennylane_create_customer_contact` | `POST /customers/{customer_id}/contacts` | Nouveau (étape 12) |
+| `pennylane_update_customer_contact` | `PUT /customers/{customer_id}/contacts/{id}` | Nouveau (étape 12) |
+
+Les corps des quatre écritures de clients (environ 2 000 caractères chacun)
+passent par le paramètre `body` au lieu d'être dépliés : dépliés, ils
+portaient `tools/list` au-delà du budget de 15 000 tokens. Les champs requis
+sont cités dans la description de l'outil ; le schéma complet s'obtient par
+`pennylane_describe_operation`, et le corps reste validé avant l'appel.
+
+### Factures clients en brouillon
+
+| Outil | Opération | Statut |
+| :--- | :--- | :--- |
+| `pennylane_create_customer_invoice_draft` | `POST /customer_invoices`, `draft: true` fixé | Nouveau (étape 12) |
+| `pennylane_create_customer_invoice_from_quote` | `POST /customer_invoices/create_from_quote`, `draft: true` fixé | Nouveau (étape 12) |
+| `pennylane_update_customer_invoice_draft` | `PUT /customer_invoices/{id}`, après relecture | Nouveau (étape 12) |
+| `pennylane_delete_customer_invoice_draft` | `DELETE /customer_invoices/{id}`, après relecture | Nouveau (étape 12) |
+
+`draft` n'est pas exposé : l'outil l'envoie à `true` et refuse toute autre
+valeur fournie dans le corps. Le garde-fou de `lib/write-guards.js` s'applique
+en plus, comme au niveau 3. La suppression renvoie `{ deleted: true, id }`.
+
+### Résumé après écriture
+
+Après création ou modification d'une facture ou d'un devis, la réponse
+commence par `summary` : identifiant, numéro, statut, client, dates, devise,
+montants HT, TVA et TTC, lien du PDF. Les champs sont relayés tels que
+Pennylane les renvoie, sans calcul (`commercialDocumentSummary`, dans
+`lib/derivations.js`). Le modèle annonce les montants attendus avant
+l'opération ; le résumé montre ceux que Pennylane a enregistrés, et tout écart
+saute aux yeux. Juste après une création, le PDF peut ne pas être encore
+généré : `pdf_note` invite à relire le document.
 
 ### Devis
 
@@ -318,8 +375,9 @@ porte son statut e-facture (`e_invoicing`). Aucun outil dédié.
 | :--- | :--- | :--- |
 | `pennylane_list_quotes` | `GET /quotes` | Existant, sans filtre de date |
 | `pennylane_get_quote` | `GET /quotes/{id}` | Nouveau |
-| `pennylane_create_quote` | `POST /quotes` | Nouveau |
-| `pennylane_update_quote` | `PUT /quotes/{id}` | Nouveau |
+| `pennylane_create_quote` | `POST /quotes`, avec résumé | Nouveau |
+| `pennylane_update_quote` | `PUT /quotes/{id}`, avec résumé | Nouveau |
+| `pennylane_update_quote_status` | `PUT /quotes/{id}/update_status` | Nouveau (étape 12) |
 
 L'API n'accepte pas de filtre `date` sur les devis (champs admis : `id`,
 `customer_id`, `status`) : l'ancien outil, qui en envoyait un, échouait en

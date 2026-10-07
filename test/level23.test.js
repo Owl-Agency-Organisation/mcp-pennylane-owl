@@ -51,11 +51,24 @@ describe('liste blanche d ecriture', () => {
     }
   });
 
-  it('exclut en toutes circonstances transactions, ecritures comptables, suppressions et webhooks', () => {
+  it('exclut en toutes circonstances transactions, ecritures comptables et webhooks', () => {
     for (const id of WRITE_OPERATION_IDS) {
-      const { path, method } = REGISTRY.operations[id];
+      const { path } = REGISTRY.operations[id];
       assert.ok(!/^\/(transactions|ledger_entries|ledger_entry_lines|webhook_subscriptions)\b/.test(path), `${id} : ${path}`);
-      assert.notEqual(method, 'DELETE', id);
+    }
+  });
+
+  it('n autorise qu une suppression : celle d une facture en brouillon', () => {
+    const deletions = [...WRITE_OPERATION_IDS].filter(id => REGISTRY.operations[id].method === 'DELETE');
+
+    assert.deepEqual(deletions, ['deleteCustomerInvoices']);
+  });
+
+  it('exclut finalisation, envois et marquage comme payee', () => {
+    for (const id of ['finalizeCustomerInvoice', 'sendByEmailCustomerInvoice', 'sendToPaCustomerInvoice',
+      'sendByEmailQuote', 'markAsPaidCustomerInvoice', 'updateImportedCustomerInvoice', 'importCustomerInvoices']) {
+      assert.ok(REGISTRY.operations[id], `${id} absente du registre`);
+      assert.ok(!WRITE_OPERATION_IDS.has(id), id);
     }
   });
 });
@@ -180,13 +193,14 @@ describe('niveau 3 : appel', () => {
     assert.equal(calls.length, 0);
   });
 
-  it('refuse toute suppression, sans appel', async () => {
-    const { isError } = await callTool('pennylane_call_operation', {
-      operation_id: 'deleteCustomerInvoices',
+  it('refuse une suppression hors liste blanche, sans appel', async () => {
+    const { isError, payload } = await callTool('pennylane_call_operation', {
+      operation_id: 'deleteSepaMandate',
       path_params: { id: 1 },
     });
 
     assert.equal(isError, true);
+    assert.match(payload.message, /hors de la liste blanche/);
     assert.equal(calls.length, 0);
   });
 
