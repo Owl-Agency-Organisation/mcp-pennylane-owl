@@ -321,10 +321,53 @@ lecture des pièces jointes.
 | `pennylane_list_customer_invoices` | `GET /customer_invoices` | Existant |
 | `pennylane_get_customer_invoice` | `GET /customer_invoices/{id}` | Existant |
 | `pennylane_get_customer_invoice_matched_transactions` | `GET /customer_invoices/{customer_invoice_id}/matched_transactions` | Existant |
-| `pennylane_list_customers` | `GET /customers` | Renommé (`pennylane_get_customers`) |
 
 La description de `pennylane_get_customer_invoice` précise que la facture
 porte son statut e-facture (`e_invoicing`). Aucun outil dédié.
+
+### Clients
+
+| Outil | Opération | Statut |
+| :--- | :--- | :--- |
+| `pennylane_list_customers` | `GET /customers` | Renommé (`pennylane_get_customers`) |
+| `pennylane_get_customer` | `GET /customers/{id}` | Nouveau (étape 12) |
+| `pennylane_create_company_customer` | `POST /company_customers` | Nouveau (étape 12) |
+| `pennylane_update_company_customer` | `PUT /company_customers/{id}` | Nouveau (étape 12) |
+| `pennylane_create_individual_customer` | `POST /individual_customers` | Nouveau (étape 12) |
+| `pennylane_update_individual_customer` | `PUT /individual_customers/{id}` | Nouveau (étape 12) |
+| `pennylane_list_customer_contacts` | `GET /customers/{customer_id}/contacts` | Nouveau (étape 12) |
+| `pennylane_create_customer_contact` | `POST /customers/{customer_id}/contacts` | Nouveau (étape 12) |
+| `pennylane_update_customer_contact` | `PUT /customers/{customer_id}/contacts/{id}` | Nouveau (étape 12) |
+
+Les corps des quatre écritures de clients (environ 2 000 caractères chacun)
+passent par le paramètre `body` au lieu d'être dépliés : dépliés, ils
+portaient `tools/list` au-delà du budget de 15 000 tokens. Les champs requis
+sont cités dans la description de l'outil ; le schéma complet s'obtient par
+`pennylane_describe_operation`, et le corps reste validé avant l'appel.
+
+### Factures clients en brouillon
+
+| Outil | Opération | Statut |
+| :--- | :--- | :--- |
+| `pennylane_create_customer_invoice_draft` | `POST /customer_invoices`, `draft: true` fixé | Nouveau (étape 12) |
+| `pennylane_create_customer_invoice_from_quote` | `POST /customer_invoices/create_from_quote`, `draft: true` fixé | Nouveau (étape 12) |
+| `pennylane_update_customer_invoice_draft` | `PUT /customer_invoices/{id}`, après relecture | Nouveau (étape 12) |
+| `pennylane_delete_customer_invoice_draft` | `DELETE /customer_invoices/{id}`, après relecture | Nouveau (étape 12) |
+
+`draft` n'est pas exposé : l'outil l'envoie à `true` et refuse toute autre
+valeur fournie dans le corps. Le garde-fou de `lib/write-guards.js` s'applique
+en plus, comme au niveau 3. La suppression renvoie `{ deleted: true, id }`.
+
+### Résumé après écriture
+
+Après création ou modification d'une facture ou d'un devis, la réponse
+commence par `summary` : identifiant, numéro, statut, client, dates, devise,
+montants HT, TVA et TTC, lien du PDF. Les champs sont relayés tels que
+Pennylane les renvoie, sans calcul (`commercialDocumentSummary`, dans
+`lib/derivations.js`). Le modèle annonce les montants attendus avant
+l'opération ; le résumé montre ceux que Pennylane a enregistrés, et tout écart
+saute aux yeux. Juste après une création, le PDF peut ne pas être encore
+généré : `pdf_note` invite à relire le document.
 
 ### Devis
 
@@ -332,8 +375,9 @@ porte son statut e-facture (`e_invoicing`). Aucun outil dédié.
 | :--- | :--- | :--- |
 | `pennylane_list_quotes` | `GET /quotes` | Existant, sans filtre de date |
 | `pennylane_get_quote` | `GET /quotes/{id}` | Nouveau |
-| `pennylane_create_quote` | `POST /quotes` | Nouveau |
-| `pennylane_update_quote` | `PUT /quotes/{id}` | Nouveau |
+| `pennylane_create_quote` | `POST /quotes`, avec résumé | Nouveau |
+| `pennylane_update_quote` | `PUT /quotes/{id}`, avec résumé | Nouveau |
+| `pennylane_update_quote_status` | `PUT /quotes/{id}/update_status` | Nouveau (étape 12) |
 
 L'API n'accepte pas de filtre `date` sur les devis (champs admis : `id`,
 `customer_id`, `status`) : l'ancien outil, qui en envoyait un, échouait en
