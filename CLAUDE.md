@@ -29,7 +29,8 @@ Architecture inchangée : GitHub vers Vercel, Next.js, endpoint unique
 
 | Sujet | Décision |
 | :--- | :--- |
-| Écriture | Liste blanche par domaine. **Autorisé** : catégories et groupes de catégories (création, modification), clients (création, modification), devis (création, modification), pièces jointes : ajout de fichiers (`POST /file_attachments`) et annexes de devis (`POST /quotes/{quote_id}/appendices`), création d'exports (FEC, grand livre, grand livre analytique). **Interdit en toutes circonstances** : transactions, écritures comptables, et tout domaine hors de cette liste |
+| Écriture | Liste blanche par domaine. **Autorisé** : catégories et groupes de catégories (création, modification), clients et leurs contacts (création, modification), devis (création, modification, changement de statut), factures clients **en brouillon uniquement** (création, création depuis un devis, modification, suppression), pièces jointes : ajout de fichiers (`POST /file_attachments`) et annexes de devis (`POST /quotes/{quote_id}/appendices`), création d'exports (FEC, grand livre, grand livre analytique). **Interdit en toutes circonstances** : transactions, écritures comptables, finalisation d'une facture, tout envoi (email d'un devis ou d'une facture, transmission à la plateforme agréée), marquage comme payée, produits, et tout domaine hors de cette liste. Décision de Philippe du 07/10/2026 |
+| Factures en brouillon | Garde-fou dans `lib/write-guards.js`, appliqué par `callOperation`, point de passage unique des niveaux 1 et 3. Création : `draft: true` exigé explicitement (un corps sans `draft` correspondrait à la variante finalisée du schéma). Modification et suppression : la facture est relue avant l'appel, refus si elle n'est pas en brouillon. La finalisation se fait à la main dans Pennylane |
 | Webhooks | Exclus à tous les niveaux, y compris de la liste blanche de `pennylane_call_operation`, tant que le récepteur n'existe pas. Le scope reste sur le token : seule la liste blanche les exclut. À rouvrir avec le chantier du récepteur |
 | Contrôle de droits | Aucune prédiction de type `access: "missing_scope"` : le schéma a déjà divergé du comportement réel (nommage des scopes jusqu'en juillet 2026), et le token mélange encore `:read` et `:readonly` : la seule source fiable des droits est `/me`. L'appel part, et un 403 est rendu actionnable en citant les scopes réels issus de `/me` |
 | OAuth 2.1 | Serveur d'autorisation sur la même origine, en parallèle du secret partagé. Stockage : Upstash Redis via le Marketplace Vercel, appelé en REST, région alignée sur les fonctions ; aucun code ni refresh token en clair, seulement son empreinte SHA-256. Propriétaire authentifié par `OAUTH_OWNER_PASSWORD`, avec limitation des essais. Enregistrement : CIMD seul, hôtes `claude.ai` et `chatgpt.com`. Durées : code 60 s, accès 1 h, refresh 90 jours avec rotation et détection de réutilisation. Scope unique `pennylane`. Claude Code continue d'utiliser le secret partagé en en-tête |
@@ -62,7 +63,8 @@ reprise.
 - Ce qui relève de Philippe (Vercel, Pennylane, GitHub, claude.ai) est signalé
   explicitement, avec la procédure pas à pas.
 - Aucun appel en écriture réel sur Pennylane, hors création d'export. Les
-  outils d'écriture sont testés sur `fetch` simulé.
+  outils d'écriture sont testés sur `fetch` simulé. Le premier essai réel
+  d'une écriture est fait par Philippe, unitairement.
 - Les workflows GitHub Actions se déclenchent sur `push` et `pull_request`,
   jamais sur `pull_request_target` : le secret `PENNYLANE_API_TOKEN` ne doit
   jamais être exposé au code d'une PR externe.

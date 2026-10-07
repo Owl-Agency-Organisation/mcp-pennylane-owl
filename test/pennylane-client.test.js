@@ -56,6 +56,13 @@ function makeClient(responses) {
 const RATE_LIMITED = 'Rate limit exceeded. Please retry in 2 seconds.';
 
 describe('client Pennylane : appels', () => {
+  it('renvoie null sur une reponse 204, sans lire de corps', async () => {
+    const empty = { ok: true, status: 204, headers: new Headers(), json: async () => assert.fail('aucun corps a lire') };
+    const { request } = makeClient([empty]);
+
+    assert.equal(await request('/customer_invoices/8', { method: 'DELETE' }), null);
+  });
+
   it('porte le token et cible la base configuree', async () => {
     const { request, calls } = makeClient([response(200, { items: [] })]);
 
