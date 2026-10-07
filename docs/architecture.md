@@ -60,20 +60,34 @@ d'écriture ne l'est que si elle figure dans la liste blanche :
 | Domaine | Écritures autorisées |
 | :--- | :--- |
 | Catégories et groupes de catégories | Création, modification |
-| Clients | Création, modification |
-| Devis | Création, modification |
+| Clients et contacts | Création, modification |
+| Devis | Création, modification, changement de statut |
+| Factures clients | **Brouillons uniquement** : création, création depuis un devis, modification, suppression |
 | Pièces jointes | Ajout de fichiers (`POST /file_attachments`) et annexes de devis (`POST /quotes/{quote_id}/appendices`) |
 | Exports | Création : FEC, grand livre, grand livre analytique |
 
-Les clients n'ont pas d'outil de niveau 1 : leur création et leur
-modification passent par le niveau 3. Les annexes de factures clients et de
-documents commerciaux restent hors périmètre.
-
 La liste blanche est tenue opération par opération dans
-`lib/tools/write-whitelist.js`. Les opérations au rattachement ambigu en sont
-exclues jusqu'à décision explicite : changement de statut et envoi par email
-d'un devis, contacts et catégories d'un client. L'envoi de fichier
+`lib/tools/write-whitelist.js`. En restent exclus : la finalisation d'une
+facture, tout envoi (email d'un devis ou d'une facture, transmission à la
+plateforme agréée), le marquage comme payée, les rapprochements, les
+catégories d'un client et les produits. L'envoi de fichier
 (`multipart/form-data`) est refusé tant que son mécanisme n'est pas arbitré.
+
+### Garde-fou : factures en brouillon
+
+Une facture finalisée porte un numéro définitif et une écriture comptable :
+elle ne s'annule que par un avoir. Le serveur ne la finalise donc jamais.
+Le garde-fou vit dans `lib/write-guards.js` et s'applique dans
+`callOperation`, point de passage unique des niveaux 1 et 3, après la
+validation des paramètres et avant l'appel :
+
+| Opération | Règle |
+| :--- | :--- |
+| `postCustomerInvoices`, `createCustomerInvoiceFromQuote` | `draft: true` exigé explicitement. Un corps sans `draft` correspondrait à la variante finalisée du schéma |
+| `updateCustomerInvoice`, `deleteCustomerInvoices` | Facture relue (`GET /customer_invoices/{id}`) ; refus si elle n'est pas en brouillon. Coût : un appel de plus |
+
+Un refus cite le statut et le numéro de la facture et oriente vers un avoir
+dans Pennylane.
 
 Toute autre écriture est refusée avec un message explicite, en particulier sur
 les transactions et les écritures comptables. Les abonnements webhook sont
