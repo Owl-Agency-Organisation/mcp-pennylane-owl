@@ -8,7 +8,8 @@ const ROUTE_URL = new URL('../app/api/mcp/route.js', import.meta.url).href;
 const realFetch = globalThis.fetch;
 
 let calls = [];
-// Reponse du faux Pennylane, selon l'URL. { status, text } simule un refus.
+// Reponse du faux Pennylane, selon l'URL. { status, text }, status numerique,
+// simule un refus ; un status textuel est un champ metier (devis, facture).
 let respondWith = () => ({ items: [], has_more: false, next_cursor: null });
 let loadCounter = 0;
 
@@ -16,7 +17,7 @@ before(() => {
   globalThis.fetch = async (url, init) => {
     calls.push({ url: new URL(String(url)), method: init?.method || 'GET', body: init?.body ? JSON.parse(init.body) : undefined });
     const answer = respondWith(new URL(String(url)));
-    if (answer?.status) return { ok: false, status: answer.status, text: async () => answer.text };
+    if (typeof answer?.status === 'number') return { ok: false, status: answer.status, text: async () => answer.text };
     return { ok: true, status: 200, json: async () => structuredClone(answer) };
   };
 });
@@ -70,7 +71,8 @@ describe('niveau 1 : catalogue', () => {
 
     for (const tool of tools.values()) {
       assert.equal(tool.annotations.openWorldHint, true, tool.name);
-      assert.equal(tool.annotations.destructiveHint, false, tool.name);
+      // Seule suppression du catalogue : une facture en brouillon.
+      assert.equal(tool.annotations.destructiveHint, tool.name === 'pennylane_delete_customer_invoice_draft', tool.name);
     }
     assert.equal(tools.get('pennylane_list_journals').annotations.readOnlyHint, true);
     assert.equal(tools.get('pennylane_create_category').annotations.readOnlyHint, false);
@@ -282,5 +284,173 @@ describe('niveau 1 : erreurs actionnables', () => {
     const { payload } = await callTool('pennylane_get_quote', { id: 9999 });
 
     assert.match(payload.message, /pennylane_search_operations/);
+  });
+});
+
+describe('niveau 1 : clients et contacts', () => {
+  const ADDRESS = { address: '1 rue Exemple', postal_code: '69001', city: 'Lyon', country_alpha2: 'FR' };
+
+  it('cree un client entreprise avec le corps passe dans body', async () => {
+    respondWith = () => ({ id: 31, name: 'Client SAS' });
+    const body = { name: 'Client SAS', billing_address: ADDRESS };
+
+    const { isError } = await callTool('pennylane_create_company_customer', { body });
+
+    assert.equal(isError, false);
+    assert.equal(calls[0].method, 'POST');
+    assert.equal(calls[0].url.pathname, '/v2/company_customers');
+    assert.deepEqual(calls[0].body, body);
+  });
+
+  it('refuse un client entreprise sans adresse de facturation, sans appel', async () => {
+    const { isError, payload } = await callTool('pennylane_create_company_customer', { body: { name: 'Client SAS' } });
+
+    assert.equal(isError, true);
+    assert.match(payload.message, /billing_address requis/);
+    assert.equal(calls.length, 0);
+  });
+
+  it('cite les champs requis dans la description, le corps n etant pas deplie', async () => {
+    const tool = (await toolsByName()).get('pennylane_create_individual_customer');
+
+    assert.deepEqual(Object.keys(tool.inputSchema.properties), ['body']);
+    assert.match(tool.description, /first_name, last_name, billing_address/);
+  });
+
+  it('modifie un client particulier en PUT sur son identifiant', async () => {
+    respondWith = () => ({ id: 32 });
+
+    await callTool('pennylane_update_individual_customer', { id: '32', body: { phone: '0600000000' } });
+
+    assert.equal(calls[0].method, 'PUT');
+    assert.equal(calls[0].url.pathname, '/v2/individual_customers/32');
+    assert.deepEqual(calls[0].body, { phone: '0600000000' });
+  });
+
+  it('ajoute un contact a un client, sans l identifiant client dans le corps', async () => {
+    respondWith = () => ({ id: 5 });
+
+    await callTool('pennylane_create_customer_contact', { customer_id: 31, first_name: 'Alice', last_name: 'Martin', email: 'alice@exemple.test' });
+
+    assert.equal(calls[0].url.pathname, '/v2/customers/31/contacts');
+    assert.deepEqual(calls[0].body, { first_name: 'Alice', last_name: 'Martin', email: 'alice@exemple.test' });
+  });
+});
+
+describe('niveau 1 : devis', () => {
+  it('change le statut d un devis', async () => {
+    respondWith = () => ({ id: 9, status: 'accepted' });
+
+    await callTool('pennylane_update_quote_status', { id: 9, status: 'accepted' });
+
+    assert.equal(calls[0].method, 'PUT');
+    assert.equal(calls[0].url.pathname, '/v2/quotes/9/update_status');
+    assert.deepEqual(calls[0].body, { status: 'accepted' });
+  });
+
+  it('refuse un statut inconnu, sans appel', async () => {
+    const { isError } = await callTool('pennylane_update_quote_status', { id: 9, status: 'sent' });
+
+    assert.equal(isError, true);
+    assert.equal(calls.length, 0);
+  });
+});
+
+describe('niveau 1 : factures en brouillon', () => {
+  const LINE = { label: 'Accompagnement', raw_currency_unit_price: '900', unit: 'jour', vat_rate: 'FR_200', quantity: 2 };
+  const INVOICE = { date: '2026-10-07', deadline: '2026-11-06', customer_id: 31, invoice_lines: [LINE] };
+  const CREATED = {
+    id: 501, invoice_number: 'brouillon', status: 'draft', draft: true, customer: { id: 31, url: 'x' },
+    date: '2026-10-07', deadline: '2026-11-06', currency: 'EUR',
+    currency_amount_before_tax: '1800.0', currency_tax: '360.0', currency_amount: '2160.0', public_file_url: null,
+  };
+
+  it('fixe draft a true et place le resume en tete de reponse', async () => {
+    respondWith = () => CREATED;
+
+    const { isError, payload } = await callTool('pennylane_create_customer_invoice_draft', { body: INVOICE });
+
+    assert.equal(isError, false, JSON.stringify(payload));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].body.draft, true);
+    assert.equal(Object.keys(payload)[0], 'summary');
+    assert.deepEqual(
+      [payload.summary.amount_before_tax, payload.summary.tax, payload.summary.amount_with_tax],
+      ['1800.0', '360.0', '2160.0'],
+    );
+    assert.equal(payload.summary.customer_id, 31);
+    assert.equal(payload.summary.pdf_url, null);
+    assert.match(payload.summary.pdf_note, /relire/);
+    assert.equal(payload.id, 501);
+  });
+
+  it('refuse draft a false plutot que de l ecraser, sans appel', async () => {
+    const { isError, payload } = await callTool('pennylane_create_customer_invoice_draft', { body: { ...INVOICE, draft: false } });
+
+    assert.equal(isError, true);
+    assert.match(payload.message, /brouillon uniquement/);
+    assert.equal(calls.length, 0);
+  });
+
+  it('n expose pas draft sur la creation depuis un devis et le fixe a true', async () => {
+    const tool = (await toolsByName()).get('pennylane_create_customer_invoice_from_quote');
+    assert.equal(tool.inputSchema.properties.draft, undefined);
+    assert.deepEqual(tool.inputSchema.required, ['quote_id']);
+
+    respondWith = () => CREATED;
+    await callTool('pennylane_create_customer_invoice_from_quote', { quote_id: 9 });
+
+    assert.equal(calls[0].url.pathname, '/v2/customer_invoices/create_from_quote');
+    assert.deepEqual(calls[0].body, { quote_id: 9, draft: true });
+  });
+
+  it('modifie un brouillon apres l avoir relu', async () => {
+    respondWith = () => CREATED;
+
+    const { isError, payload } = await callTool('pennylane_update_customer_invoice_draft', { id: 501, body: { label: 'Mission octobre' } });
+
+    assert.equal(isError, false, JSON.stringify(payload));
+    assert.deepEqual(calls.map(c => `${c.method} ${c.url.pathname}`), ['GET /v2/customer_invoices/501', 'PUT /v2/customer_invoices/501']);
+    assert.equal(payload.summary.id, 501);
+  });
+
+  it('refuse de modifier une facture finalisee', async () => {
+    respondWith = () => ({ ...CREATED, draft: false, status: 'upcoming', invoice_number: 'F-2026-012' });
+
+    const { isError, payload } = await callTool('pennylane_update_customer_invoice_draft', { id: 501, body: { label: 'x' } });
+
+    assert.equal(isError, true);
+    assert.match(payload.message, /avoir/);
+    assert.deepEqual(calls.map(c => c.method), ['GET']);
+  });
+
+  it('supprime un brouillon et le confirme', async () => {
+    respondWith = () => CREATED;
+
+    const { isError, payload } = await callTool('pennylane_delete_customer_invoice_draft', { id: 501 });
+
+    assert.equal(isError, false, JSON.stringify(payload));
+    assert.deepEqual(calls.map(c => `${c.method} ${c.url.pathname}`), ['GET /v2/customer_invoices/501', 'DELETE /v2/customer_invoices/501']);
+    assert.deepEqual(payload, { deleted: true, id: 501 });
+  });
+
+  it('refuse de supprimer une facture finalisee', async () => {
+    respondWith = () => ({ ...CREATED, draft: false, status: 'paid' });
+
+    const { isError } = await callTool('pennylane_delete_customer_invoice_draft', { id: 501 });
+
+    assert.equal(isError, true);
+    assert.deepEqual(calls.map(c => c.method), ['GET']);
+  });
+
+  it('place aussi le resume en tete apres creation d un devis', async () => {
+    respondWith = () => ({ id: 9, quote_number: 'D-2026-004', status: 'pending', currency_amount_before_tax: '900.0', currency_tax: '180.0', currency_amount: '1080.0', public_file_url: 'https://pdf.test/d' });
+
+    const { payload } = await callTool('pennylane_create_quote', { body: { customer_id: 31, date: '2026-10-07', deadline: '2026-11-06', invoice_lines: [LINE] } });
+
+    assert.equal(payload.summary.number, 'D-2026-004');
+    assert.equal(payload.summary.draft, undefined);
+    assert.equal(payload.summary.pdf_url, 'https://pdf.test/d');
+    assert.equal(payload.summary.pdf_note, undefined);
   });
 });
