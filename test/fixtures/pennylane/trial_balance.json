@@ -1,0 +1,146 @@
+{
+  "items": [
+    {
+      "credits": "65642.24",
+      "debits": "818.5",
+      "label": "Capital souscrit - appelé, versé",
+      "number": "1013",
+      "formatted_number": "1013000000"
+    },
+    {
+      "credits": "56138.6",
+      "debits": "0.0",
+      "label": "Matériel de bureau et matériel informatique",
+      "number": "2183",
+      "formatted_number": "2183000000"
+    },
+    {
+      "credits": "48494.0",
+      "debits": "11837.2",
+      "label": "Amortissements sur matériel de bureau et matériel informatique",
+      "number": "28183",
+      "formatted_number": "2818300000"
+    },
+    {
+      "credits": "21128.0",
+      "debits": "64000.0",
+      "label": "Fournisseurs",
+      "number": "401",
+      "formatted_number": "4010000000"
+    },
+    {
+      "credits": "9371.0",
+      "debits": "1400.4",
+      "label": "Fournisseurs Factures non parvenues",
+      "number": "4081",
+      "formatted_number": "4081000000"
+    },
+    {
+      "credits": "0.0",
+      "debits": "63278.1",
+      "label": "Clients",
+      "number": "411",
+      "formatted_number": "4110000000"
+    },
+    {
+      "credits": "74366.55",
+      "debits": "0.0",
+      "label": "Clients - Avances et acomptes reçus sur commandes",
+      "number": "4191",
+      "formatted_number": "4191000000"
+    },
+    {
+      "credits": "66245.0",
+      "debits": "66593.0",
+      "label": "TVA à décaisser",
+      "number": "44551",
+      "formatted_number": "4455100000"
+    },
+    {
+      "credits": "26515.5",
+      "debits": "0.0",
+      "label": "TVA déductible sur immobilisations (biens)",
+      "number": "445624",
+      "formatted_number": "4456240000"
+    },
+    {
+      "credits": "0.0",
+      "debits": "26880.0",
+      "label": "TVA déductible sur encaissements",
+      "number": "44564",
+      "formatted_number": "4456400000"
+    },
+    {
+      "credits": "67801.7",
+      "debits": "97421.85",
+      "label": "TVA déductible sur autres biens et services",
+      "number": "44566",
+      "formatted_number": "4456600000"
+    },
+    {
+      "credits": "64933.9",
+      "debits": "64358.0",
+      "label": "TVA collectée à 20%",
+      "number": "44571009",
+      "formatted_number": "4457100900"
+    },
+    {
+      "credits": "78915.0",
+      "debits": "12727.51",
+      "label": "TVA collectée sur encaissements",
+      "number": "44574",
+      "formatted_number": "4457400000"
+    },
+    {
+      "credits": "0.0",
+      "debits": "0.0",
+      "label": "TVA collectée sur encaissements (TVA 20%)",
+      "number": "4457400009",
+      "formatted_number": "4457400009"
+    },
+    {
+      "credits": "28019.0",
+      "debits": "41395.52",
+      "label": "Taxes sur le chiffre d'affaires à régulariser ou en attente",
+      "number": "4458",
+      "formatted_number": "4458000000"
+    },
+    {
+      "credits": "0.0",
+      "debits": "0.0",
+      "label": "Associés - Comptes courants",
+      "number": "455",
+      "formatted_number": "4550000000"
+    },
+    {
+      "credits": "35297.5",
+      "debits": "0.0",
+      "label": "Divers comptes débiteurs et produits à recevoir (anciennement Autres comptes débiteurs ou créditeurs)",
+      "number": "467",
+      "formatted_number": "4670000000"
+    },
+    {
+      "credits": "564.01",
+      "debits": "39148.6",
+      "label": "Comptes d'attente",
+      "number": "471",
+      "formatted_number": "4710000000"
+    },
+    {
+      "credits": "82944.29",
+      "debits": "0.0",
+      "label": "Banque - Compte principal - décaissements en attente",
+      "number": "4716001",
+      "formatted_number": "4716001000"
+    },
+    {
+      "credits": "51246.0",
+      "debits": "1304.0",
+      "label": "Banque - Compte principal - encaissements en attente",
+      "number": "4717001",
+      "formatted_number": "4717001000"
+    }
+  ],
+  "has_more": true,
+  "next_cursor": "Y3Vyc2V1ci1maWN0aWY="
+}

@@ -1,5 +1,7 @@
 name: CI
 
+# Jamais `pull_request_target` : le secret PENNYLANE_API_TOKEN ne doit pas
+# atteindre le code d'une PR externe.
 on:
   push:
     branches: [main]
@@ -26,3 +28,11 @@ jobs:
       # l'exécution.
       - name: Build
         run: npm run build
+
+      # Démarre le serveur de production et interroge le vrai Pennylane. Le
+      # secret MCP est généré par le script ; seul le token Pennylane vient
+      # des secrets du dépôt.
+      - name: Smoke
+        run: npm run smoke
+        env:
+          PENNYLANE_API_TOKEN: ${{ secrets.PENNYLANE_API_TOKEN }}
